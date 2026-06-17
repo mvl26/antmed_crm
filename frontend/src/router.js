@@ -5,6 +5,9 @@ import { viewsStore } from '@/stores/views'
 import { isAntmedUser, isAntmedPath } from '@/utils/antmed'
 import { shouldRedirectNotPermitted } from '@/utils/antmedGuard'
 
+// T4 — màn prototype dùng chung 1 stub tới khi T5–T14 dựng màn thật.
+const antmedStub = () => import('@/pages/Antmed/AntmedScreenStub.vue')
+
 const routes = [
   {
     path: '/',
@@ -119,6 +122,12 @@ const routes = [
     component: () => import('@/pages/AntmedContracts.vue'),
   },
   {
+    path: '/antmed/contracts/:name',
+    name: 'AntmedContractDetail',
+    component: () => import('@/pages/AntmedContractDetail.vue'),
+    props: true,
+  },
+  {
     path: '/antmed/hospitals/:name',
     name: 'AntmedHospitalDetail',
     component: () => import('@/pages/AntmedHospitalDetail.vue'),
@@ -130,6 +139,35 @@ const routes = [
     component: () => import('@/pages/AntmedDoctorDetail.vue'),
     props: true,
   },
+
+  // ── T4: 24 màn prototype role-prefixed (mockup AntMed). meta.antmedShell ⇒
+  // render trong AntmedLayout (App.vue). meta.role ⇒ sidebar role-aware (T3).
+  // Non-destructive: A1=/ceo, KHÔNG hijack Home '/'. Stub → T5–T14 thay màn thật.
+  { path: '/ceo', name: 'AntmedCeoDashboard', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
+  { path: '/ceo/contract-health', name: 'AntmedContractHealth', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
+  { path: '/ceo/revenue', name: 'AntmedRevenue', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
+  { path: '/sales/dispatch', name: 'AntmedDispatch', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
+  { path: '/sales/team', name: 'AntmedTeam', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
+  { path: '/sales/approvals', name: 'AntmedApprovals', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
+  { path: '/rep', name: 'AntmedRepHome', meta: { antmedShell: true, role: 'rep' }, component: antmedStub },
+  { path: '/rep/wizard', name: 'AntmedDeliveryWizard', meta: { antmedShell: true, role: 'rep' }, component: antmedStub },
+  { path: '/rep/checklist', name: 'AntmedInstrumentChecklist', meta: { antmedShell: true, role: 'rep' }, component: antmedStub },
+  { path: '/rep/doctor', name: 'AntmedRepDoctor', meta: { antmedShell: true, role: 'rep' }, component: antmedStub },
+  { path: '/rep/offline', name: 'AntmedOffline', meta: { antmedShell: true, role: 'rep' }, component: antmedStub },
+  { path: '/warehouse/export', name: 'AntmedWarehouseExport', meta: { antmedShell: true, role: 'warehouse' }, component: antmedStub },
+  { path: '/warehouse/consignment', name: 'AntmedConsignment', meta: { antmedShell: true, role: 'warehouse' }, component: antmedStub },
+  { path: '/warehouse/lot-trace', name: 'AntmedLotTrace', meta: { antmedShell: true, role: 'warehouse' }, component: antmedStub },
+  { path: '/docs/pending', name: 'AntmedDocsPending', meta: { antmedShell: true, role: 'docs' }, component: antmedStub },
+  { path: '/docs/co-cq', name: 'AntmedCoCq', meta: { antmedShell: true, role: 'docs' }, component: antmedStub },
+  { path: '/docs/reconciliation', name: 'AntmedReconciliation', meta: { antmedShell: true, role: 'docs' }, component: antmedStub },
+  { path: '/finance/receivables', name: 'AntmedReceivables', meta: { antmedShell: true, role: 'finance' }, component: antmedStub },
+  { path: '/finance/commission', name: 'AntmedCommission', meta: { antmedShell: true, role: 'finance' }, component: antmedStub },
+  { path: '/portal', name: 'AntmedPortalHome', meta: { antmedShell: true, role: 'portal' }, component: antmedStub },
+  { path: '/portal/history', name: 'AntmedPortalHistory', meta: { antmedShell: true, role: 'portal' }, component: antmedStub },
+  { path: '/admin/users', name: 'AntmedUsers', meta: { antmedShell: true, role: 'admin' }, component: antmedStub },
+  { path: '/admin/audit', name: 'AntmedAudit', meta: { antmedShell: true, role: 'admin' }, component: antmedStub },
+  { path: '/instruments', name: 'AntmedInstruments', meta: { antmedShell: true, role: 'warehouse' }, component: antmedStub },
+
   {
     path: '/welcome',
     name: 'Welcome',

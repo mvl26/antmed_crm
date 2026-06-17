@@ -71,3 +71,69 @@ describe('AntMed router guard — Gate-3 (allow-check additive)', () => {
     expect(routerSrc).not.toMatch(/NV kinh doanh|Thủ kho|Quản lý/)
   })
 })
+
+// ── T4: bảng route 24 màn prototype (role-prefixed, meta antmedShell + role) ──
+// Non-destructive (DEC user 2026-06-17): A1=/ceo, KHÔNG hijack Home '/' — landing
+// thật giữ nguyên. 24 route trỏ AntmedScreenStub; T5–T14 thay bằng màn thật.
+describe('T4 — routing 24 màn prototype', () => {
+  const PROTO = [
+    ['AntmedCeoDashboard', '/ceo', 'ceo'],
+    ['AntmedContractHealth', '/ceo/contract-health', 'ceo'],
+    ['AntmedRevenue', '/ceo/revenue', 'ceo'],
+    ['AntmedDispatch', '/sales/dispatch', 'sales'],
+    ['AntmedTeam', '/sales/team', 'sales'],
+    ['AntmedApprovals', '/sales/approvals', 'sales'],
+    ['AntmedRepHome', '/rep', 'rep'],
+    ['AntmedDeliveryWizard', '/rep/wizard', 'rep'],
+    ['AntmedInstrumentChecklist', '/rep/checklist', 'rep'],
+    ['AntmedRepDoctor', '/rep/doctor', 'rep'],
+    ['AntmedOffline', '/rep/offline', 'rep'],
+    ['AntmedWarehouseExport', '/warehouse/export', 'warehouse'],
+    ['AntmedConsignment', '/warehouse/consignment', 'warehouse'],
+    ['AntmedLotTrace', '/warehouse/lot-trace', 'warehouse'],
+    ['AntmedDocsPending', '/docs/pending', 'docs'],
+    ['AntmedCoCq', '/docs/co-cq', 'docs'],
+    ['AntmedReconciliation', '/docs/reconciliation', 'docs'],
+    ['AntmedReceivables', '/finance/receivables', 'finance'],
+    ['AntmedCommission', '/finance/commission', 'finance'],
+    ['AntmedPortalHome', '/portal', 'portal'],
+    ['AntmedPortalHistory', '/portal/history', 'portal'],
+    ['AntmedUsers', '/admin/users', 'admin'],
+    ['AntmedAudit', '/admin/audit', 'admin'],
+    ['AntmedInstruments', '/instruments', 'warehouse'],
+  ]
+
+  it('đủ 24 route prototype (name + path) trong router.js', () => {
+    expect(PROTO).toHaveLength(24)
+    for (const [name, pth] of PROTO) {
+      expect(routerSrc).toMatch(new RegExp(`name:\\s*['"]${name}['"]`))
+      expect(routerSrc).toContain(`'${pth}'`)
+    }
+  })
+
+  it('route prototype gắn meta antmedShell:true + role (key, không VI role-name)', () => {
+    expect(routerSrc).toMatch(/antmedShell:\s*true/)
+    for (const role of [
+      'ceo',
+      'sales',
+      'rep',
+      'warehouse',
+      'docs',
+      'finance',
+      'portal',
+      'admin',
+    ]) {
+      expect(routerSrc).toMatch(new RegExp(`role:\\s*['"]${role}['"]`))
+    }
+  })
+
+  it('A1 = /ceo — non-destructive (KHÔNG gắn antmedShell/redirect cho Home /)', () => {
+    // Home '/' vẫn là route 'Home' không component (beforeEach xử lý) — giữ landing thật.
+    expect(routerSrc).toMatch(/name:\s*['"]AntmedCeoDashboard['"]/)
+    expect(routerSrc).toMatch(/path:\s*['"]\/ceo['"]/)
+  })
+
+  it('màn chưa dựng dùng AntmedScreenStub (T5–T14 thay dần)', () => {
+    expect(routerSrc).toMatch(/AntmedScreenStub/)
+  })
+})
