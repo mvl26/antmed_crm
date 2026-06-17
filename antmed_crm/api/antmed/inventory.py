@@ -12,6 +12,18 @@ import frappe
 from frappe import _
 
 ITEM_DOCTYPE = "AntMed Item"
+WAREHOUSE_DOCTYPE = "AntMed Warehouse"
+
+# Field warehouse trả về cho list endpoint (Hyrum contract với FE).
+WAREHOUSE_LIST_FIELDS = ["name", "warehouse_name", "warehouse_type", "employee", "hospital", "disabled"]
+WAREHOUSE_LIST_ITEM_KEYS = (
+	"name",
+	"warehouse_name",
+	"warehouse_type",
+	"employee",
+	"hospital",
+	"disabled",
+)
 
 # Field item trả về cho list endpoint (Hyrum — đổi = breaking FE binding).
 ITEM_LIST_FIELDS = [
@@ -115,3 +127,37 @@ def get_item(name: str) -> dict:
 	result = {k: doc.get(k) for k in ITEM_DETAIL_FIELDS}
 	result["lots"] = []
 	return result
+
+
+@frappe.whitelist(methods=["GET"])
+def list_warehouses(
+	warehouse_type: str | None = None,
+	filters: dict | str | None = None,
+	start: int = 0,
+	page_length: int = 20,
+) -> dict:
+	"""Danh sách kho (3 cấp). Trả RAW {data, total_count} — count==rows khi page_length=0.
+
+	- warehouse_type: lọc nhanh theo loại kho (Tổng/Cá nhân NV/Ký gửi BV).
+	- total_count đếm DƯỚI permission user (get_list, pluck) → giữ invariant count==rows.
+	- Mỗi item gồm ĐÚNG 6 field: name, warehouse_name, warehouse_type, employee, hospital, disabled.
+	"""
+	conditions = _coerce_filters(filters)
+	if warehouse_type:
+		conditions.append(["warehouse_type", "=", warehouse_type])
+
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+
+	rows = frappe.get_list(
+		WAREHOUSE_DOCTYPE,
+		filters=conditions,
+		fields=WAREHOUSE_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by="warehouse_name asc",
+	)
+	data = [{k: r.get(k) for k in WAREHOUSE_LIST_ITEM_KEYS} for r in rows]
+
+	total_count = len(frappe.get_list(WAREHOUSE_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
