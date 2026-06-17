@@ -33,7 +33,7 @@ Dựng prototype trực quan 24 màn/8 vai trò khớp mockup, dữ liệu mẫu
 
 ### Phase 2 — Màn theo vai trò (mỗi task: 1 commit, test content-assert, build khi đủ điều kiện)
 
-- [ ] **T5 — CEO (A1, A2, A3).** Dashboard điều hành, Sức khỏe HĐ, Báo cáo DT. *Deps:* T4. *Scope:* M.
+- [x] **T5 — CEO (A1, A2, A3).** Dashboard điều hành, Sức khỏe HĐ, Báo cáo DT. *Deps:* T4. *Scope:* M.
 - [ ] **T6 — Trưởng KD (B1, B2, B3).** Kanban điều phối, Quản lý đội ngũ, Hộp duyệt. *Deps:* T4. *Scope:* M.
 - [ ] **T7 — NV mobile I (C1, C2, C3).** Trang chủ, Wizard 4 bước, Checklist bộ DC (trong AmPhoneFrame/AmTablet). *Deps:* T4. *Scope:* M.
 - [ ] **T8 — NV mobile II (C4, C5).** CRM Bác sỹ, Offline mode. *Deps:* T4. *Scope:* S.

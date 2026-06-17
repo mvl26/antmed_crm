@@ -143,9 +143,9 @@ const routes = [
   // ── T4: 24 màn prototype role-prefixed (mockup AntMed). meta.antmedShell ⇒
   // render trong AntmedLayout (App.vue). meta.role ⇒ sidebar role-aware (T3).
   // Non-destructive: A1=/ceo, KHÔNG hijack Home '/'. Stub → T5–T14 thay màn thật.
-  { path: '/ceo', name: 'AntmedCeoDashboard', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
-  { path: '/ceo/contract-health', name: 'AntmedContractHealth', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
-  { path: '/ceo/revenue', name: 'AntmedRevenue', meta: { antmedShell: true, role: 'ceo' }, component: antmedStub },
+  { path: '/ceo', name: 'AntmedCeoDashboard', meta: { antmedShell: true, role: 'ceo' }, component: () => import('@/pages/Antmed/AntmedCeoDashboard.vue') },
+  { path: '/ceo/contract-health', name: 'AntmedContractHealth', meta: { antmedShell: true, role: 'ceo' }, component: () => import('@/pages/Antmed/AntmedContractHealth.vue') },
+  { path: '/ceo/revenue', name: 'AntmedRevenue', meta: { antmedShell: true, role: 'ceo' }, component: () => import('@/pages/Antmed/AntmedRevenue.vue') },
   { path: '/sales/dispatch', name: 'AntmedDispatch', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
   { path: '/sales/team', name: 'AntmedTeam', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
   { path: '/sales/approvals', name: 'AntmedApprovals', meta: { antmedShell: true, role: 'sales' }, component: antmedStub },
