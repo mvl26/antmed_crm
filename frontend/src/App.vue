@@ -40,7 +40,9 @@ const AntmedLayout = defineAsyncComponent(
   () => import('./components/Antmed/AntmedLayout.vue'),
 )
 const Layout = computed(() => {
-  if (isAntmedPath(route.path)) {
+  // AntMed shell chọn theo route.meta.antmedShell (24 màn prototype role-based) HOẶC
+  // isAntmedPath (route /antmed/* real-data cũ — giữ tương thích, no-regression).
+  if (route.meta?.antmedShell || isAntmedPath(route.path)) {
     return AntmedLayout
   }
   if (window.innerWidth < 640) {
