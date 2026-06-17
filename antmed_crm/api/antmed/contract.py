@@ -256,3 +256,105 @@ def get_contract_health(start: int = 0, page_length: int = 20) -> dict:
 
 	total_count = len(frappe.get_list(CONTRACT_DOCTYPE, pluck="name", limit_page_length=0))
 	return {"data": data, "total_count": total_count}
+
+
+# Ngưỡng cảnh báo used_pct (cao→thấp) + ngưỡng ngày sắp hết hạn (§4).
+QUOTA_ALERT_BANDS = (100, 90, 70)
+EXPIRY_ALERT_DAYS = 30
+
+
+def _quota_threshold(used_pct: float) -> int | None:
+	"""Band cảnh báo cao nhất đã chạm theo used_pct (100/90/70); None nếu <70."""
+	for band in QUOTA_ALERT_BANDS:
+		if used_pct >= band:
+			return band
+	return None
+
+
+@frappe.whitelist(methods=["GET"])
+def list_quota_alerts() -> dict:
+	"""Cảnh báo điều hành (M02-2, §4/§5): quota chạm 70/90/100% + HĐ sắp hết hạn (≤30 ngày).
+
+	Trả RAW {data, total_count}. Chỉ gồm HĐ user đọc được (get_list dưới DocPerm) → count==rows
+	(noperm → rỗng, fail-closed). Mỗi alert có shape ổn định 10 key (Hyrum):
+	  kind 'quota'|'expiry' · contract/contract_no/hospital/hospital_name ·
+	  item/item_name/used_pct/threshold (quota) · days_to_expiry (expiry).
+	Quota gộp batch theo parent IN scope (KHÔNG N+1).
+	"""
+	contracts = frappe.get_list(
+		CONTRACT_DOCTYPE,
+		fields=[
+			"name",
+			"contract_no",
+			"hospital",
+			"hospital.hospital_name as hospital_name",
+			"valid_to",
+		],
+		limit_page_length=0,
+		order_by=f"`tab{CONTRACT_DOCTYPE}`.modified desc",
+	)
+	by_name = {c["name"]: c for c in contracts}
+	names = list(by_name)
+	today = getdate(nowdate())
+	alerts = []
+
+	# Quota alerts — mỗi dòng item có used_pct ≥ 70.
+	if names:
+		for it in frappe.get_all(
+			QUOTA_ITEM_DOCTYPE,
+			filters={"parenttype": CONTRACT_DOCTYPE, "parentfield": "items", "parent": ("in", names)},
+			fields=["parent", "item", "item_name", "quota_qty", "used_qty"],
+		):
+			quota = it.get("quota_qty") or 0
+			if not quota:
+				continue
+			used_pct = round(100 * (it.get("used_qty") or 0) / quota, 2)
+			band = _quota_threshold(used_pct)
+			if band is None:
+				continue
+			c = by_name[it["parent"]]
+			alerts.append(
+				{
+					"kind": "quota",
+					"contract": c["name"],
+					"contract_no": c.get("contract_no"),
+					"hospital": c.get("hospital"),
+					"hospital_name": c.get("hospital_name"),
+					"item": it.get("item"),
+					"item_name": it.get("item_name"),
+					"used_pct": used_pct,
+					"threshold": band,
+					"days_to_expiry": None,
+				}
+			)
+
+	# Expiry alerts — HĐ còn ≤ 30 ngày tới valid_to (gồm cả đã quá hạn, ngày âm).
+	for c in contracts:
+		if not c.get("valid_to"):
+			continue
+		days_to_expiry = (getdate(c["valid_to"]) - today).days
+		if days_to_expiry <= EXPIRY_ALERT_DAYS:
+			alerts.append(
+				{
+					"kind": "expiry",
+					"contract": c["name"],
+					"contract_no": c.get("contract_no"),
+					"hospital": c.get("hospital"),
+					"hospital_name": c.get("hospital_name"),
+					"item": None,
+					"item_name": None,
+					"used_pct": None,
+					"threshold": None,
+					"days_to_expiry": days_to_expiry,
+				}
+			)
+
+	# Nặng trước: quota (threshold desc) rồi expiry (gần hạn trước) — thứ tự hiển thị ổn định.
+	alerts.sort(
+		key=lambda a: (
+			0 if a["kind"] == "quota" else 1,
+			-(a["threshold"] or 0),
+			a["days_to_expiry"] if a["days_to_expiry"] is not None else 9999,
+		)
+	)
+	return {"data": alerts, "total_count": len(alerts)}
