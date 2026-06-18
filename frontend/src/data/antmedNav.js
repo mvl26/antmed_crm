@@ -36,6 +36,14 @@ export const ANTMED_NAV = [
     enabled: true,
   },
   {
+    // M02-2 (mockup A2) — màn "Sức khỏe Hợp đồng": quota + hạn HĐ. Route real-data đã build.
+    key: 'contract-health',
+    label: 'Sức khỏe Hợp đồng',
+    icon: '🩺',
+    to: '/antmed/contract-health',
+    enabled: true,
+  },
+  {
     key: 'inventory',
     label: 'Tồn kho',
     icon: '📦',
@@ -43,18 +51,19 @@ export const ANTMED_NAV = [
     enabled: false,
   },
   {
+    // M04 Slice S1: route /antmed/deliveries đã build (list real-data) → bật nav.
     key: 'deliveries',
     label: 'Giao phòng mổ',
     icon: '🚚',
     to: '/antmed/deliveries',
-    enabled: false,
+    enabled: true,
   },
   {
     key: 'instruments',
     label: 'Bộ dụng cụ',
     icon: '🧰',
     to: '/antmed/instruments',
-    enabled: false,
+    enabled: true,
   },
   {
     key: 'documents',
@@ -70,6 +79,163 @@ export const ANTMED_NAV = [
     icon: '📈',
     to: '/antmed/reports',
     enabled: false,
+  },
+]
+
+/**
+ * Sidebar TOÀN DIỆN (grouped) — nguồn duy nhất cho điều hướng mặc định AntMed.
+ * Gom MỌI màn real-data /antmed/* đã build theo nhóm chức năng → từ /antmed user
+ * truy cập được đầy đủ tính năng (KHÔNG ẩn sau role switcher, KHÔNG trỏ stub /ceo,/portal).
+ * Thêm màn mới = thêm item vào section tương ứng (kèm route thật trong router.js).
+ */
+export const ANTMED_SECTIONS = [
+  {
+    title: 'Điều hành',
+    items: [
+      {
+        key: 'dashboard',
+        label: 'Dashboard',
+        icon: '📊',
+        to: '/antmed',
+        enabled: true,
+      },
+      {
+        key: 'revenue',
+        label: 'Báo cáo Doanh thu',
+        icon: '💰',
+        to: '/antmed/revenue',
+        enabled: true,
+      },
+      {
+        key: 'alerts',
+        label: 'Cảnh báo điều hành',
+        icon: '⚠',
+        to: '/antmed/alerts',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Khách hàng & Hợp đồng',
+    items: [
+      {
+        key: 'hospitals',
+        label: 'Bệnh viện',
+        icon: '🏥',
+        to: '/antmed/hospitals',
+        enabled: true,
+      },
+      {
+        key: 'contracts',
+        label: 'Hợp đồng',
+        icon: '📋',
+        to: '/antmed/contracts',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Kinh doanh',
+    items: [
+      {
+        key: 'dispatch',
+        label: 'Bảng điều phối',
+        icon: '🎯',
+        to: '/antmed/sales/dispatch',
+        enabled: true,
+      },
+      {
+        // M04 S1: list phiếu Giao phòng mổ (real-data delivery.list_deliveries).
+        key: 'deliveries',
+        label: 'Giao phòng mổ',
+        icon: '🚚',
+        to: '/antmed/deliveries',
+        enabled: true,
+      },
+      {
+        key: 'team',
+        label: 'Quản lý đội ngũ',
+        icon: '👥',
+        to: '/antmed/sales/team',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Kho vận',
+    items: [
+      {
+        key: 'stock-entries',
+        label: 'Phiếu xuất kho',
+        icon: '📤',
+        to: '/antmed/warehouse/stock-entries',
+        enabled: true,
+      },
+      {
+        key: 'consignment',
+        label: 'Kho ký gửi BV',
+        icon: '🏥',
+        to: '/antmed/warehouse/consignment',
+        enabled: true,
+      },
+      {
+        key: 'lot-trace',
+        label: 'Truy vết lot',
+        icon: '🔍',
+        to: '/antmed/warehouse/lot-trace',
+        enabled: true,
+      },
+      {
+        key: 'expiry-alerts',
+        label: 'Cảnh báo HSD',
+        icon: '⏰',
+        to: '/antmed/warehouse/expiry-alerts',
+        enabled: true,
+      },
+      {
+        key: 'instruments',
+        label: 'Bộ dụng cụ',
+        icon: '🧰',
+        to: '/antmed/instruments',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Tài chính',
+    items: [
+      {
+        key: 'commission',
+        label: 'Hoa hồng NV',
+        icon: '💼',
+        to: '/antmed/finance/commission',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Portal Bệnh viện',
+    items: [
+      {
+        key: 'portal',
+        label: 'Trang chủ Portal',
+        icon: '🏠',
+        to: '/antmed/portal',
+        enabled: true,
+      },
+    ],
+  },
+  {
+    title: 'Quản trị',
+    items: [
+      {
+        key: 'admin-users',
+        label: 'User & Role',
+        icon: '👥',
+        to: '/antmed/admin/users',
+        enabled: true,
+      },
+    ],
   },
 ]
 
@@ -123,22 +289,32 @@ export const ROLE_NAV = {
       key: 'ceo-dash',
       label: 'Dashboard',
       icon: '📊',
-      to: '/',
-      enabled: false,
+      to: '/antmed',
+      enabled: true,
     },
     {
+      // M02-2 (mockup A2 id=ceo, sidebar "Hợp đồng" active) — trỏ màn real-data "Sức khỏe Hợp đồng".
       key: 'ceo-contracts',
       label: 'Hợp đồng',
       icon: '📋',
-      to: '/ceo/contract-health',
-      enabled: false,
+      to: '/antmed/contract-health',
+      enabled: true,
     },
     {
+      // M02-3 (mockup A1 widget ⚠ "Cảnh báo điều hành") — màn real-data list_quota_alerts.
+      key: 'ceo-alerts',
+      label: 'Cảnh báo',
+      icon: '⚠',
+      to: '/antmed/alerts',
+      enabled: true,
+    },
+    {
+      // M02-9 (mockup A3 id=ceo) — trỏ màn real-data "Doanh thu theo Nhóm vật tư" (/antmed/revenue).
       key: 'ceo-revenue',
       label: 'Doanh thu',
       icon: '💰',
-      to: '/ceo/revenue',
-      enabled: false,
+      to: '/antmed/revenue',
+      enabled: true,
     },
     {
       key: 'ceo-inventory',
@@ -171,11 +347,13 @@ export const ROLE_NAV = {
   ],
   sales: [
     {
+      // M10-2: trỏ màn real-data "Bảng điều phối" (/antmed/sales/dispatch, mockup B1).
+      // Route prototype /sales/dispatch giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
       key: 'sales-dispatch',
       label: 'Điều phối',
       icon: '🎯',
-      to: '/sales/dispatch',
-      enabled: false,
+      to: '/antmed/sales/dispatch',
+      enabled: true,
     },
     {
       key: 'sales-approvals',
@@ -185,11 +363,13 @@ export const ROLE_NAV = {
       enabled: false,
     },
     {
+      // M10-1: trỏ màn real-data "Quản lý Đội ngũ" (/antmed/sales/team, mockup B2).
+      // Route prototype /sales/team giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
       key: 'sales-team',
       label: 'Đội ngũ',
       icon: '👥',
-      to: '/sales/team',
-      enabled: false,
+      to: '/antmed/sales/team',
+      enabled: true,
     },
     {
       key: 'sales-customers',
@@ -252,25 +432,39 @@ export const ROLE_NAV = {
       enabled: false,
     },
     {
+      // M03-1: trỏ màn real-data "Phiếu xuất gần đây" (/antmed/warehouse/stock-entries).
+      // Route prototype /warehouse/export giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
       key: 'wh-export',
       label: 'Xuất cho NV',
       icon: '📤',
-      to: '/warehouse/export',
-      enabled: false,
+      to: '/antmed/warehouse/stock-entries',
+      enabled: true,
     },
     {
+      // M03-3: trỏ màn real-data "Kho ký gửi tại Bệnh viện" (/antmed/warehouse/consignment).
+      // Route prototype /warehouse/consignment giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
       key: 'wh-consignment',
       label: 'Kho ký gửi BV',
       icon: '🏥',
-      to: '/warehouse/consignment',
-      enabled: false,
+      to: '/antmed/warehouse/consignment',
+      enabled: true,
     },
     {
+      // M03-2: trỏ màn real-data "Thông tin lot" (/antmed/warehouse/lot-trace).
+      // Route prototype /warehouse/lot-trace giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
       key: 'wh-lot-trace',
       label: 'Truy vết lot',
       icon: '🔍',
-      to: '/warehouse/lot-trace',
-      enabled: false,
+      to: '/antmed/warehouse/lot-trace',
+      enabled: true,
+    },
+    {
+      // M03-4: màn real-data "Cảnh báo HSD" (mockup D1 sidebar ⚠) — rollup lô cận/quá date toàn kho.
+      key: 'wh-expiry',
+      label: 'Cảnh báo HSD',
+      icon: '⚠',
+      to: '/antmed/warehouse/expiry-alerts',
+      enabled: true,
     },
     {
       key: 'wh-instruments',
@@ -329,11 +523,19 @@ export const ROLE_NAV = {
       key: 'fin-commission',
       label: 'Hoa hồng NV',
       icon: '💼',
-      to: '/finance/commission',
-      enabled: false,
+      to: '/antmed/finance/commission',
+      enabled: true,
     },
   ],
   portal: [
+    {
+      // M07-1: màn real-data "Portal Bệnh viện — Trang chủ" (/antmed/portal, mockup G1).
+      key: 'portal-home',
+      label: 'Trang chủ Portal',
+      icon: '🏠',
+      to: '/antmed/portal',
+      enabled: true,
+    },
     {
       key: 'portal-call',
       label: 'Gọi vật tư',
@@ -361,8 +563,8 @@ export const ROLE_NAV = {
       key: 'admin-users',
       label: 'User & Role',
       icon: '👥',
-      to: '/admin/users',
-      enabled: false,
+      to: '/antmed/admin/users',
+      enabled: true,
     },
     {
       key: 'admin-rules',

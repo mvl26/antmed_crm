@@ -2,6 +2,12 @@ import { readFileSync } from 'fs'
 import path from 'path'
 import { ANTMED_NAV, isNavActive } from '../../src/data/antmedNav'
 import { shouldRedirectNotPermitted } from '../../src/utils/antmedGuard'
+import {
+  quotaUsedPct,
+  quotaBarTheme,
+  quotaBarClass,
+  BAR_THEME,
+} from '../../src/utils/antmedUi'
 
 // M02 Slice M02-1 — màn DANH SÁCH Hợp đồng (/antmed/contracts, AntmedContracts.vue).
 // Idiom test = content-assert nguồn (router/nav/page/data) + behavior-assert helper thuần
@@ -16,6 +22,10 @@ const pageSrc = readFileSync(
   'utf8',
 )
 const dataSrc = readFileSync(path.join(srcDir, 'data/antmed.js'), 'utf8')
+const detailSrc = readFileSync(
+  path.join(srcDir, 'pages/AntmedContractDetail.vue'),
+  'utf8',
+)
 
 const antmed = () => ({ isCrmUser: () => false, isAntmedUser: () => true })
 const crm = () => ({ isCrmUser: () => true, isAntmedUser: () => false })
@@ -49,9 +59,11 @@ describe('M02 route — /antmed/contracts đăng ký + guard allow', () => {
     expect(routerSrc).toMatch(/AntmedContracts\.vue/)
   })
 
-  it('KHÔNG đăng ký route Detail (AntmedContractDetail / :name) ở vòng này (ADR-M02-06)', () => {
-    expect(routerSrc).not.toMatch(/name:\s*['"]AntmedContractDetail['"]/)
-    expect(routerSrc).not.toMatch(/\/antmed\/contracts\/:/)
+  // ĐẢO CÓ CHỦ ĐÍCH (Slice M02-1b): ADR-M02-06 được ĐẢO — route Detail nay ĐÃ đăng ký.
+  // (assertion cũ `.not.toMatch` của vòng M02-1 bị thay bằng `.toMatch`; KHÔNG xóa câu khác.)
+  it('ĐÃ đăng ký route Detail (AntmedContractDetail / :name) — ĐẢO ADR-M02-06 ở Slice M02-1b', () => {
+    expect(routerSrc).toMatch(/name:\s*['"]AntmedContractDetail['"]/)
+    expect(routerSrc).toMatch(/\/antmed\/contracts\/:name/)
   })
 
   it('guard: AntMed user mở /antmed/contracts KHÔNG redirect; CRM user cũng pass', () => {
@@ -71,9 +83,9 @@ describe('M02 route — /antmed/contracts đăng ký + guard allow', () => {
 })
 
 describe('M02 data layer — listContracts gọi đúng endpoint (naming contract BE-FE)', () => {
-  it('listContracts → createResource url crm.api.antmed.contract.list_contracts', () => {
+  it('listContracts → createResource url antmed_crm.api.antmed.contract.list_contracts', () => {
     expect(dataSrc).toMatch(/export function listContracts/)
-    expect(dataSrc).toMatch(/crm\.api\.antmed\.contract\.list_contracts/)
+    expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.contract\.list_contracts/)
   })
 
   it('CONTRACT_WORKFLOW_THEME map đủ 5 status VI (key khớp EXACT options DocType)', () => {
@@ -122,7 +134,12 @@ describe('AntmedContracts.vue — tri-branch render + param==selection + no dead
     expect(pageSrc).toMatch(/function onSearch/)
     expect(pageSrc).toMatch(/filters\.hospital\s*=\s*activeHospital\.value/)
     expect(pageSrc).toMatch(/filters\.status\s*=\s*activeStatus\.value/)
-    expect(pageSrc).toMatch(/contracts\.submit\(\{\s*search:\s*search\.value,\s*filters\s*\}\)/)
+    // refetch gửi buildParams() — gom search + filters (JSON-string) một chỗ
+    expect(pageSrc).toMatch(/function buildParams/)
+    expect(pageSrc).toMatch(/contracts\.submit\(buildParams\(\)\)/)
+    // GUARD bug "[object Object]": filters PHẢI JSON.stringify trước khi gửi GET
+    // (createResource GET serialize object thô → "[object Object]" → BE _coerce_filters parse lỗi → mất data)
+    expect(pageSrc).toMatch(/filters:\s*JSON\.stringify\(filters\)/)
   })
 
   it('statusOptions = 5 giá trị VI + "Tất cả" (khớp options DocType, KHÔNG chuỗi EN)', () => {
@@ -131,28 +148,190 @@ describe('AntmedContracts.vue — tri-branch render + param==selection + no dead
     }
   })
 
-  it('row-click KHÔNG dead-end: openContract no-op, KHÔNG router.push live tới AntmedContractDetail', () => {
-    // openContract giữ chữ ký nhưng KHÔNG điều hướng (chỉ comment nhắc vòng sau)
+  // ĐẢO CÓ CHỦ ĐÍCH (Slice M02-1b): drill-down mở lại — openContract nay ĐIỀU HƯỚNG
+  // router.push name 'AntmedContractDetail' params name=row.name (assertion cũ no-op bị thay).
+  it('row-click drill-down: openContract router.push name AntmedContractDetail params name=row.name', () => {
     expect(pageSrc).toMatch(/function openContract/)
-    // KHÔNG còn lệnh router.push thực thi (chỉ trong comment). Bỏ comment rồi assert.
+    // Bỏ comment rồi assert có lệnh router.push THỰC THI tới route Detail.
     const codeNoComments = pageSrc
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/<!--[\s\S]*?-->/g, '')
       .replace(/^\s*\/\/.*$/gm, '')
-    expect(codeNoComments).not.toMatch(/router\.push/)
-    expect(codeNoComments).not.toMatch(/AntmedContractDetail/)
+    expect(codeNoComments).toMatch(/router\.push/)
+    expect(codeNoComments).toMatch(
+      /router\.push\(\s*\{\s*name:\s*['"]AntmedContractDetail['"]/,
+    )
+    expect(codeNoComments).toMatch(/params:\s*\{\s*name/)
   })
 
-  it('<tr> dữ liệu KHÔNG còn affordance click (cursor/role=link/tabindex/@click openContract)', () => {
-    // Lấy block <tbody>…</tbody>, GỠ comment HTML (comment giải thích có nhắc các affordance
-    // đã gỡ → không tính là affordance thật) rồi assert hàng dữ liệu không gợi ý bấm.
+  it('<tr> dữ liệu MỞ LẠI affordance click (cursor-pointer + role=link + tabindex + @click + @keydown.enter + aria-label)', () => {
+    // Lấy block <tbody>…</tbody>, GỠ comment HTML rồi assert hàng dữ liệu gợi ý bấm được.
     const tbody = pageSrc
       .slice(pageSrc.indexOf('<tbody>'), pageSrc.indexOf('</tbody>') + 8)
       .replace(/<!--[\s\S]*?-->/g, '')
-    expect(tbody).not.toMatch(/@click/)
-    expect(tbody).not.toMatch(/@keydown/)
-    expect(tbody).not.toMatch(/role="link"/)
-    expect(tbody).not.toMatch(/cursor-pointer/)
-    expect(tbody).not.toMatch(/tabindex/)
+    expect(tbody).toMatch(/@click/)
+    expect(tbody).toMatch(/@keydown\.enter/)
+    expect(tbody).toMatch(/role="link"/)
+    expect(tbody).toMatch(/cursor-pointer/)
+    expect(tbody).toMatch(/tabindex/)
+    expect(tbody).toMatch(/aria-label/)
+    expect(tbody).toMatch(/openContract\(\s*row\.name\s*\)/)
+  })
+})
+
+// ── Slice M02-1b — màn CHI TIẾT Hợp đồng (AntmedContractDetail.vue) ──────────
+
+describe('M02 data layer — getContract gọi đúng endpoint get_contract + param name', () => {
+  it('getContract → createResource url antmed_crm.api.antmed.contract.get_contract', () => {
+    expect(dataSrc).toMatch(/export function getContract/)
+    expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.contract\.get_contract/)
+  })
+
+  it('Detail page truyền param { name } qua getContract({ params: { name: ... } })', () => {
+    expect(detailSrc).toMatch(/getContract\(/)
+    expect(detailSrc).toMatch(/params:\s*\{\s*name:\s*props\.name\s*\}/)
+  })
+})
+
+describe('M02 route Detail — guard /antmed/contracts/:name allow như list', () => {
+  it('guard: AntMed user + CRM user mở /antmed/contracts/AM-HD-0001 KHÔNG redirect', () => {
+    expect(
+      shouldRedirectNotPermitted(
+        { path: '/antmed/contracts/AM-HD-0001' },
+        antmed(),
+      ),
+    ).toBe(false)
+    expect(
+      shouldRedirectNotPermitted(
+        { path: '/antmed/contracts/AM-HD-0001' },
+        crm(),
+      ),
+    ).toBe(false)
+  })
+
+  it('guard: outsider mở /antmed/contracts/AM-HD-0001 bị redirect', () => {
+    expect(
+      shouldRedirectNotPermitted(
+        { path: '/antmed/contracts/AM-HD-0001' },
+        outsider(),
+      ),
+    ).toBe(true)
+  })
+
+  it('route Detail lazy import AntmedContractDetail.vue + props:true', () => {
+    expect(routerSrc).toMatch(
+      /import\(['"]@\/pages\/AntmedContractDetail\.vue['"]\)/,
+    )
+    // props:true nằm trong block route Detail (sau name AntmedContractDetail).
+    const block = routerSrc.slice(
+      routerSrc.indexOf("name: 'AntmedContractDetail'"),
+    )
+    expect(block.slice(0, 200)).toMatch(/props:\s*true/)
+  })
+})
+
+describe('quota bar — ngưỡng màu theo % ĐÃ DÙNG (helper thuần antmedUi)', () => {
+  it('quotaUsedPct = 100 - remaining_pct, clamp 0–100, null→0 (không vỡ)', () => {
+    expect(quotaUsedPct(28)).toBe(72) // remaining 28 → đã dùng 72
+    expect(quotaUsedPct(5)).toBe(95) // remaining 5 → đã dùng 95
+    expect(quotaUsedPct(100)).toBe(0) // chưa dùng
+    expect(quotaUsedPct(0)).toBe(100) // dùng hết
+    expect(quotaUsedPct(null)).toBe(0) // null → 0 (xanh)
+    expect(quotaUsedPct(undefined)).toBe(0)
+    expect(quotaUsedPct(-10)).toBe(100) // clamp trên
+    expect(quotaUsedPct(150)).toBe(0) // clamp dưới
+  })
+
+  it('quotaBarTheme: >=95 danger, >=72 warn, còn lại default (brand xanh)', () => {
+    expect(quotaBarTheme(95)).toBe('danger')
+    expect(quotaBarTheme(99)).toBe('danger')
+    expect(quotaBarTheme(72)).toBe('warn')
+    expect(quotaBarTheme(80)).toBe('warn')
+    expect(quotaBarTheme(50)).toBe('default')
+    expect(quotaBarTheme(0)).toBe('default')
+  })
+
+  it('quotaBarClass(remaining_pct): remaining=5 (đã dùng 95) → class danger (đỏ)', () => {
+    // remaining_pct=5 → usedPct=95 → theme danger → BAR_THEME.danger (đỏ)
+    expect(quotaBarClass(5)).toBe(BAR_THEME.danger)
+    // remaining_pct=28 → usedPct=72 → warn (cam)
+    expect(quotaBarClass(28)).toBe(BAR_THEME.warn)
+    // remaining_pct=100 → usedPct=0 → default (brand xanh)
+    expect(quotaBarClass(100)).toBe(BAR_THEME.default)
+  })
+})
+
+describe('AntmedContractDetail.vue — render header + bảng quota (content-assert)', () => {
+  it('đọc r.data.items TRỰC TIẾP (KHÔNG r.data.data — get_contract không phải list-wrap)', () => {
+    expect(detailSrc).toMatch(/contract\.data\?\.items/)
+    expect(detailSrc).not.toMatch(/contract\.data\?\.data/)
+  })
+
+  it('header HĐ: contract_no / hospital_name / signed_date / valid_from / valid_to / total_value / status', () => {
+    expect(detailSrc).toMatch(/contract\.data\.contract_no/)
+    expect(detailSrc).toMatch(/contract\.data\.hospital_name/)
+    expect(detailSrc).toMatch(/contract\.data\.signed_date/)
+    expect(detailSrc).toMatch(/contract\.data\.valid_from/)
+    expect(detailSrc).toMatch(/contract\.data\.valid_to/)
+    expect(detailSrc).toMatch(/contract\.data\.total_value/)
+    expect(detailSrc).toMatch(/contract\.data\.status/)
+  })
+
+  it('total_value qua formatCurrency (định dạng VND), badge status qua theme map', () => {
+    expect(detailSrc).toMatch(/formatCurrency\(contract\.data\.total_value\)/)
+    expect(detailSrc).toMatch(/currency:\s*'VND'/)
+    expect(detailSrc).toMatch(/statusTheme\(contract\.data\.status\)/)
+    expect(detailSrc).toMatch(/CONTRACT_WORKFLOW_THEME/)
+  })
+
+  it('bảng quota: item_name fallback item, uom, unit_price formatCurrency, quota_qty, used_qty', () => {
+    expect(detailSrc).toMatch(/row\.item_name\s*\|\|\s*row\.item/)
+    expect(detailSrc).toMatch(/row\.uom/)
+    expect(detailSrc).toMatch(/formatCurrency\(row\.unit_price\)/)
+    expect(detailSrc).toMatch(/row\.quota_qty/)
+    expect(detailSrc).toMatch(/row\.used_qty/)
+  })
+
+  it('thanh % dùng usedPct(row.remaining_pct) cho width + barClass màu theo ngưỡng', () => {
+    expect(detailSrc).toMatch(/usedPct\(row\.remaining_pct\)/)
+    expect(detailSrc).toMatch(/barClass\(row\.remaining_pct\)/)
+    // helper thuần được import (ngưỡng đỏ≥95/cam≥72/xanh sống ở antmedUi).
+    expect(detailSrc).toMatch(/quotaUsedPct|quotaBarClass/)
+  })
+
+  it('cờ lock_at_100 → chip "Khóa khi đủ 100%" khi truthy (ẩn khi false)', () => {
+    expect(detailSrc).toMatch(/row\.lock_at_100/)
+    expect(detailSrc).toMatch(/Khóa khi đủ 100%/)
+  })
+})
+
+describe('AntmedContractDetail.vue — tri-branch loading/error/empty', () => {
+  it('tri-branch: loading / error (banner + Thử lại reload) / data', () => {
+    expect(detailSrc).toMatch(/contract\.loading/)
+    expect(detailSrc).toMatch(/contract\.error/)
+    expect(detailSrc).toMatch(/Thử lại/)
+    expect(detailSrc).toMatch(/contract\.reload\(\)/)
+  })
+
+  it('empty-state quota "Chưa có dòng quota" khi items rỗng (không vỡ render)', () => {
+    expect(detailSrc).toMatch(/Chưa có dòng quota/)
+    expect(detailSrc).toMatch(/!items\.length/)
+  })
+
+  it('error-state KHÔNG leak stacktrace: dùng error.messages[0]/message + fallback VI', () => {
+    expect(detailSrc).toMatch(/contract\.error\?\.messages\?\.\[0\]/)
+    expect(detailSrc).toMatch(/Không tải được chi tiết hợp đồng/)
+  })
+
+  it('breadcrumb: nút quay lại điều hướng router.push name AntmedContracts', () => {
+    expect(detailSrc).toMatch(/Quay lại danh sách hợp đồng/)
+    expect(detailSrc).toMatch(
+      /router\.push\(\s*\{\s*name:\s*['"]AntmedContracts['"]/,
+    )
+  })
+
+  it('KHÔNG createListResource / axios / .ts (idiom frappe-ui thuần)', () => {
+    expect(detailSrc).not.toMatch(/createListResource/)
+    expect(detailSrc).not.toMatch(/axios|@tanstack\/vue-query|useApi\(/)
   })
 })

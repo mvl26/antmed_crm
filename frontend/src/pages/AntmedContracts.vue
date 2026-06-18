@@ -116,16 +116,19 @@
         </thead>
         <tbody>
           <!--
-            Row-click drill-down VÔ HIỆU ở vòng này (ADR-M02-06): route
-            'AntmedContractDetail' (/antmed/contracts/:name) CHƯA tồn tại → tránh
-            điều hướng tới route no-match (dead-end). Đã gỡ cursor-pointer / role=link /
-            tabindex / @click / @keydown / aria-label "Xem chi tiết" để dòng không gợi ý
-            bấm được. TODO (Slice M02-1b Detail): khôi phục các affordance + openContract.
+            Drill-down ĐÃ MỞ (ADR-M02-07, supersede ADR-M02-06): route
+            'AntmedContractDetail' (/antmed/contracts/:name) đã đăng ký ở router.js →
+            dòng dữ liệu là affordance click/keyboard điều hướng tới màn Chi tiết HĐ.
           -->
           <tr
             v-for="row in rows"
             :key="row.name"
-            class="text-p-base text-ink-gray-8"
+            role="link"
+            tabindex="0"
+            :aria-label="__('Xem chi tiết hợp đồng') + ' ' + (row.contract_no || row.name)"
+            class="cursor-pointer text-p-base text-ink-gray-8 transition hover:bg-surface-gray-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-outline-gray-3"
+            @click="openContract(row.name)"
+            @keydown.enter="openContract(row.name)"
           >
             <td class="border-b border-outline-gray-1 py-3 pr-4 font-medium text-ink-gray-9">
               {{ row.contract_no || row.name }}
@@ -166,9 +169,12 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Badge, Button, FormControl, FeatherIcon, toast } from 'frappe-ui'
 import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
 import { listContracts, listHospitals, CONTRACT_WORKFLOW_THEME } from '@/data/antmed'
+
+const router = useRouter()
 
 // Options trạng thái — value khớp EXACT options DocType `AntMed Contract.status` (VI có dấu).
 // value rỗng = Tất cả. KHÔNG hardcode chuỗi EN.
@@ -199,9 +205,18 @@ const hospitalOptions = computed(() => {
   return opts
 })
 
+// FE→BE contract: filters PHẢI là JSON-string (BE _coerce_filters → frappe.parse_json).
+// Object thô → createResource GET serialize "[object Object]" → BE parse lỗi → mất data.
+function buildParams() {
+  const filters = {}
+  if (activeHospital.value) filters.hospital = activeHospital.value
+  if (activeStatus.value) filters.status = activeStatus.value
+  return { search: search.value, filters: JSON.stringify(filters) }
+}
+
 // Resource list HĐ — endpoint trả dict bọc { data, total_count }, đọc r.data.data.
 const contracts = listContracts({
-  params: { search: '', filters: {} },
+  params: buildParams(),
   auto: true,
 })
 
@@ -234,12 +249,9 @@ function formatCurrency(value) {
 }
 
 // Param phát đi == UI selection (chống dead-control LL-FE-13): rebuild filters từ
-// hospital + status, search riêng. Filter là dict {field: value} (BE _coerce_filters).
+// hospital + status, search riêng → buildParams (JSON-string filters, BE _coerce_filters).
 function refetch() {
-  const filters = {}
-  if (activeHospital.value) filters.hospital = activeHospital.value
-  if (activeStatus.value) filters.status = activeStatus.value
-  contracts.submit({ search: search.value, filters })
+  contracts.submit(buildParams())
 }
 
 let searchTimer = null
@@ -259,11 +271,10 @@ function setStatus(value) {
   refetch()
 }
 
-// No-op ở vòng DANH SÁCH (ADR-M02-06): route 'AntmedContractDetail' chưa thuộc vòng
-// này → KHÔNG điều hướng (tránh dead-end no-match). Giữ chữ ký hàm để vòng Detail
-// (Slice M02-1b) khôi phục: router.push({ name: 'AntmedContractDetail', params: { name } }).
-function openContract(_name) {
-  // TODO(M02-1b): wire drill-down khi route AntmedContractDetail được đăng ký.
+// Drill-down list → detail (ADR-M02-07): route 'AntmedContractDetail' đã đăng ký →
+// điều hướng tới màn Chi tiết HĐ theo name (KHÔNG dead-end no-match).
+function openContract(name) {
+  router.push({ name: 'AntmedContractDetail', params: { name } })
 }
 
 // Surface lỗi BR-XX / permission từ BE qua toast (ngoài banner tri-branch).

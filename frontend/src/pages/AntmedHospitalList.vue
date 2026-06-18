@@ -179,9 +179,16 @@ const rankOptions = [
 const search = ref('')
 const activeRank = ref('')
 
+// FE→BE contract: filters PHẢI là JSON-string (BE _coerce_filters dùng frappe.parse_json).
+// Truyền object thô → createResource GET serialize thành "[object Object]" → BE parse lỗi → mất data.
+function buildParams() {
+  const filters = activeRank.value ? { rank: activeRank.value } : {}
+  return { search: search.value, filters: JSON.stringify(filters) }
+}
+
 // Resource list — endpoint trả dict bọc { data, total_count }, đọc r.data.data.
 const hospitals = listHospitals({
-  params: { search: '', filters: {} },
+  params: buildParams(),
   auto: true,
 })
 
@@ -204,8 +211,7 @@ function contractTheme(status) {
 
 // Param phát đi == UI selection (chống dead-control): rebuild params từ search + rank.
 function refetch() {
-  const filters = activeRank.value ? { rank: activeRank.value } : {}
-  hospitals.submit({ search: search.value, filters })
+  hospitals.submit(buildParams())
 }
 
 let searchTimer = null

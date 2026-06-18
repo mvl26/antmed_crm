@@ -5,6 +5,7 @@ import {
   isNavActive,
   ANTMED_ROLES,
   navForRole,
+  ANTMED_SECTIONS,
 } from '../../src/data/antmedNav'
 
 // Slice 1 — AntMed app shell (topbar + sidebar) khớp mockup A1.
@@ -18,6 +19,62 @@ const layoutSrc = readFileSync(
   'utf8',
 )
 const appSrc = readFileSync(path.join(srcDir, 'App.vue'), 'utf8')
+
+// ── FIX điều hướng: sidebar TOÀN DIỆN — mọi màn real-data /antmed/* truy cập được
+// từ /antmed (KHÔNG còn ẩn sau role switcher / KHÔNG trỏ stub /ceo,/portal). ──
+describe('ANTMED_SECTIONS — sidebar toàn diện (mọi màn real-data)', () => {
+  const flat = () => ANTMED_SECTIONS.flatMap((s) => s.items)
+  it('mảng section {title, items[]} không rỗng', () => {
+    expect(Array.isArray(ANTMED_SECTIONS)).toBe(true)
+    expect(ANTMED_SECTIONS.length).toBeGreaterThanOrEqual(5)
+    for (const s of ANTMED_SECTIONS) {
+      expect(s.title).toBeTruthy()
+      expect(Array.isArray(s.items) && s.items.length > 0).toBe(true)
+    }
+  })
+  it('mọi item enabled + to là route /antmed/* THẬT + key duy nhất (KHÔNG stub)', () => {
+    const keys = new Set()
+    for (const i of flat()) {
+      expect(i.label && i.icon).toBeTruthy()
+      expect(i.enabled).toBe(true)
+      expect(i.to.startsWith('/antmed')).toBe(true)
+      expect(keys.has(i.key)).toBe(false)
+      keys.add(i.key)
+    }
+  })
+  it('icon là string (data giữ key; layout map sang component thư viện)', () => {
+    for (const i of flat()) {
+      expect(typeof i.icon).toBe('string')
+      expect(i.icon.length).toBeGreaterThan(0)
+    }
+  })
+  it('phủ màn cốt lõi mọi vai trò (CEO/KD/Kho/Tài chính/Portal)', () => {
+    const tos = flat().map((i) => i.to)
+    for (const t of [
+      '/antmed',
+      '/antmed/contracts',
+      '/antmed/revenue',
+      '/antmed/alerts',
+      '/antmed/hospitals',
+      '/antmed/sales/dispatch',
+      '/antmed/sales/team',
+      '/antmed/warehouse/stock-entries',
+      '/antmed/warehouse/consignment',
+      '/antmed/warehouse/lot-trace',
+      '/antmed/warehouse/expiry-alerts',
+      '/antmed/finance/commission',
+      '/antmed/portal',
+    ]) {
+      expect(tos).toContain(t)
+    }
+  })
+})
+
+describe('AntmedLayout — sidebar mặc định dùng ANTMED_SECTIONS (truy cập đầy đủ)', () => {
+  it('layout render ANTMED_SECTIONS (grouped) — không chỉ navForRole', () => {
+    expect(layoutSrc).toMatch(/ANTMED_SECTIONS/)
+  })
+})
 
 describe('AntMed nav config — single source cho sidebar shell', () => {
   it('Dashboard + Bệnh viện là route thật đã có (enabled)', () => {
@@ -150,13 +207,25 @@ describe('AntmedLayout.vue — shell mockup + role switcher', () => {
     expect(layoutSrc).toMatch(/AntMed CRM/)
   })
 
-  it('sidebar render qua navForRole (không hardcode 1 danh sách)', () => {
-    expect(layoutSrc).toMatch(/antmedNav/)
-    expect(layoutSrc).toMatch(/navForRole/)
+  it('sidebar render qua ANTMED_SECTIONS + icon component THƯ VIỆN (KHÔNG emoji)', () => {
+    expect(layoutSrc).toMatch(/ANTMED_SECTIONS/)
+    // icon dùng component thư viện @/components/Icons/* (xoá emoji render-as-text)
+    expect(layoutSrc).toMatch(/@\/components\/Icons\//)
+    expect(layoutSrc).toMatch(/iconFor/)
+    expect(layoutSrc).toMatch(/:is="iconFor/)
+    // KHÔNG còn render emoji thô {{ item.icon }} trong template
+    expect(layoutSrc).not.toMatch(/\{\{\s*item\.icon\s*\}\}/)
   })
 
-  it('có role switcher (ANTMED_ROLES) để duyệt 8 vai trò', () => {
-    expect(layoutSrc).toMatch(/ANTMED_ROLES/)
+  it('header: popup thông báo (Popover) + avatar user THẬT, KHÔNG còn role switcher', () => {
+    expect(layoutSrc).toMatch(/notificationsStore|unreadNotificationsCount/)
+    // thông báo dạng popup dropdown (frappe-ui Popover), KHÔNG panel slide-out
+    expect(layoutSrc).toMatch(/Popover/)
+    // avatar user thật (initials/ảnh) → trang cá nhân
+    expect(layoutSrc).toMatch(/userInitials|userImage/)
+    expect(layoutSrc).toMatch(/\/antmed\/profile/)
+    // role switcher <select v-model="selectedRole"> đã gỡ khỏi header
+    expect(layoutSrc).not.toMatch(/v-model="selectedRole"/)
   })
 
   it('hỗ trợ portal variant (topbar trắng cho vai trò G)', () => {
@@ -173,10 +242,10 @@ describe('AntmedLayout.vue — shell mockup + role switcher', () => {
   })
 })
 
-describe('App.vue — chọn layout AntMed theo route.meta.antmedShell', () => {
-  it('dùng route.meta.antmedShell (mở rộng) + giữ isAntmedPath (tương thích)', () => {
-    expect(appSrc).toMatch(/meta\??\.antmedShell|antmedShell/)
-    expect(appSrc).toMatch(/isAntmedPath/)
+describe('App.vue — layout AntMed DUY NHẤT (Phase 2: chỉ UI AntMed)', () => {
+  it('render AntmedLayout, đã bỏ import layout Mobile/Desktop của CRM gốc', () => {
     expect(appSrc).toMatch(/AntmedLayout/)
+    // khớp đường dẫn import (KHÔNG khớp comment) — đã gỡ ./components/Layouts/{Mobile,Desktop}Layout
+    expect(appSrc).not.toMatch(/Layouts\/(Mobile|Desktop)Layout/)
   })
 })

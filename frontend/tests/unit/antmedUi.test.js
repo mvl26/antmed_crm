@@ -8,6 +8,10 @@ import {
   stageClass,
   alertClass,
   kanbanAccentClass,
+  quotaRingTheme,
+  ringColorVar,
+  RING_COLOR_VAR,
+  quotaRingStyle,
 } from '../../src/utils/antmedUi'
 
 // T1 — UI kit prototype. Test tầng thuần (antmedUi.js) + content-assert mỗi component tồn tại.
@@ -52,6 +56,50 @@ describe('antmedUi — bar / heat / stage / alert / kanban', () => {
     expect(kanbanAccentClass('urgent')).toMatch(/red/)
     expect(kanbanAccentClass('ok')).toMatch(/green/)
     expect(kanbanAccentClass('')).toBe('')
+  })
+})
+
+describe('antmedUi — M11 quota ring (CEO A1)', () => {
+  it('quotaRingTheme: đỏ ≥95 / cam ≥72 / xanh (default), biên inclusive', () => {
+    expect(quotaRingTheme(95)).toBe('danger')
+    expect(quotaRingTheme(96)).toBe('danger')
+    expect(quotaRingTheme(94.99)).toBe('warn')
+    expect(quotaRingTheme(72)).toBe('warn')
+    expect(quotaRingTheme(71.99)).toBe('default')
+    expect(quotaRingTheme(0)).toBe('default')
+  })
+
+  it('ringColorVar dùng CSS var token (KHÔNG hex thô) + fallback teal', () => {
+    expect(ringColorVar('danger')).toBe('var(--red-600)')
+    expect(ringColorVar('warn')).toBe('var(--orange-500)')
+    expect(ringColorVar('default')).toBe('var(--teal-600)')
+    expect(ringColorVar('khong-ton-tai')).toBe(RING_COLOR_VAR.default)
+    // KHÔNG có mã màu hex thô trong map (chỉ var token).
+    for (const v of Object.values(RING_COLOR_VAR)) {
+      expect(v).toMatch(/^var\(--/)
+      expect(v).not.toMatch(/#[0-9a-fA-F]{3,6}/)
+    }
+  })
+
+  it('quotaRingStyle: conic-gradient theo % (clamp) + màu theo ngưỡng', () => {
+    // 50% → góc 180deg, màu xanh (default).
+    const s50 = quotaRingStyle(50)
+    expect(s50.background).toContain('var(--teal-600)')
+    expect(s50.background).toContain('180deg')
+    // 100% → đỏ (≥95), góc 360deg.
+    expect(quotaRingStyle(100).background).toContain('var(--red-600)')
+    expect(quotaRingStyle(100).background).toContain('360deg')
+    // 80% → cam (≥72).
+    expect(quotaRingStyle(80).background).toContain('var(--orange-500)')
+  })
+
+  it('quotaRingStyle: clamp >100 → 360deg, <0 → 0deg, null/NaN → 0deg xanh', () => {
+    expect(quotaRingStyle(150).background).toContain('360deg')
+    expect(quotaRingStyle(-5).background).toContain('0deg')
+    expect(quotaRingStyle(null).background).toContain('var(--teal-600)')
+    expect(quotaRingStyle(undefined).background).toContain('0deg')
+    // KHÔNG NaN lọt vào string.
+    expect(quotaRingStyle('xx').background).not.toMatch(/NaN/)
   })
 })
 
