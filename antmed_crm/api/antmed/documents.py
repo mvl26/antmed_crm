@@ -15,6 +15,11 @@ from frappe import _
 DOCUMENT_DOCTYPE = "AntMed Document"
 QUEUE_DOCTYPE = "AntMed Document Release Queue"
 DELIVERY_DOCTYPE = "AntMed Delivery"
+CERTIFICATE_DOCTYPE = "AntMed Certificate"
+LOT_DOCTYPE = "AntMed Lot"
+
+CERT_LIST_FIELDS = ["name", "cert_no", "cert_type", "item", "lot", "issued_date", "expires_at"]
+CERT_LIST_ITEM_KEYS = ("name", "cert_no", "cert_type", "item", "lot", "issued_date", "expires_at")
 
 QUEUE_LIST_FIELDS = ["name", "delivery", "document_bundle", "status", "missing_chips", "assigned_to"]
 QUEUE_LIST_ITEM_KEYS = ("name", "delivery", "document_bundle", "status", "missing_chips", "assigned_to")
@@ -132,3 +137,59 @@ def get_bundle(name: str) -> dict:
 	result = {k: doc.get(k) for k in DOC_DETAIL_FIELDS}
 	result["lines"] = [{k: ln.get(k) for k in LINE_KEYS} for ln in (doc.get("lines") or [])]
 	return result
+
+
+@frappe.whitelist(methods=["POST"])
+def attach_cocq(lot: str, cert_type: str, cert_no: str, item: str | None = None, file_url: str | None = None) -> dict:
+	"""Gắn 1 chứng từ CO hoặc CQ vào lô (tạo AntMed Certificate + set lô.co_cert/cq_cert).
+
+	(hash_sha256 file + audit BR-10 wire ở M14.)
+	"""
+	if cert_type not in ("CO", "CQ"):
+		frappe.throw(_("cert_type phải là 'CO' hoặc 'CQ'."))
+	if not frappe.has_permission(CERTIFICATE_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền gắn chứng từ."), frappe.PermissionError)
+	cert = frappe.get_doc(
+		{"doctype": CERTIFICATE_DOCTYPE, "cert_no": cert_no, "cert_type": cert_type, "lot": lot, "item": item, "file_url": file_url}
+	)
+	cert.insert(ignore_permissions=True)
+	field = "co_cert" if cert_type == "CO" else "cq_cert"
+	frappe.db.set_value(LOT_DOCTYPE, lot, field, cert.name)
+	return {"certificate": cert.name, "lot": lot, "cert_type": cert_type}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_cocq_store(cert_type: str | None = None, search: str | None = None, start: int = 0, page_length: int = 20) -> dict:
+	"""Kho CO/CQ (danh sách chứng từ). Trả RAW {data, total_count} — count==rows dưới DocPerm."""
+	conditions = []
+	if cert_type:
+		conditions.append(["cert_type", "=", cert_type])
+	if search:
+		conditions.append(["cert_no", "like", f"%{search}%"])
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	rows = frappe.get_list(
+		CERTIFICATE_DOCTYPE,
+		filters=conditions,
+		fields=CERT_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by="modified desc",
+	)
+	data = [{k: r.get(k) for k in CERT_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(CERTIFICATE_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+def assert_cocq_complete(delivery: str) -> None:
+	"""BR-03 (chặn cứng): throw nếu còn VT requires_cocq thiếu CO/CQ. Gọi trước phát hành (M06-S3)."""
+	_lines, missing = _build_lines(delivery)
+	if missing:
+		frappe.throw(_("BR-03: Còn vật tư thiếu CO/CQ, không thể phát hành: {0}.").format(", ".join(missing)))
+
+
+@frappe.whitelist(methods=["GET"])
+def check_release(delivery: str) -> dict:
+	"""Kiểm tra điều kiện phát hành (BR-03, KHÔNG throw): {can_release, missing, status}."""
+	_lines, missing = _build_lines(delivery)
+	return {"can_release": not missing, "missing": missing, "status": _status_for(missing)}
