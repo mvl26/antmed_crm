@@ -7,12 +7,23 @@
 mỗi user chỉ thấy data trong phạm vi. Write offline (apply_outbox/pull_changes) ở M12-S2.
 """
 
+import json
+
 import frappe
 from frappe import _
 from frappe.utils import now_datetime
 
 DEVICE_DOCTYPE = "AntMed Mobile Device"
 LOT_DOCTYPE = "AntMed Lot"
+SYNC_LOG_DOCTYPE = "AntMed Mobile Sync Log"
+
+# Allowlist op offline → endpoint thật (KHÔNG dispatch tùy ý — chống abuse). BR-M12-2.
+_OUTBOX_OPS = {
+	"save_care_note": "antmed_crm.api.antmed.doctor_care.save_care_note",
+	"check_in": "antmed_crm.api.antmed.doctor_care.check_in",
+	"submit_survey": "antmed_crm.api.antmed.doctor_care.submit_survey",
+	"register_device": "antmed_crm.api.antmed.mobile_sync.register_device",
+}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -69,3 +80,58 @@ def register_device(device_id: str, push_token: str | None = None, platform: str
 	else:
 		frappe.get_doc({"doctype": DEVICE_DOCTYPE, "device_id": device_id, **values}).insert(ignore_permissions=True)
 	return {"device_id": device_id, "registered": True}
+
+
+def _outbox_done(key: str | None) -> bool:
+	"""Đã áp thành công op này (idempotency theo idempotency_key) chưa? BR-M12-1."""
+	return bool(key) and bool(frappe.db.exists(SYNC_LOG_DOCTYPE, {"doctype_synced": key, "direction": "Push", "status": "OK"}))
+
+
+def _log_sync(key: str | None, status: str, error: str | None = None) -> None:
+	frappe.get_doc(
+		{"doctype": SYNC_LOG_DOCTYPE, "user": frappe.session.user, "direction": "Push", "doctype_synced": key, "record_count": 1, "status": status, "error_log": error}
+	).insert(ignore_permissions=True)
+
+
+@frappe.whitelist(methods=["POST"])
+def apply_outbox(operations) -> dict:
+	"""Replay hàng đợi offline của mobile. Mỗi op {idempotency_key, operation, payload}.
+
+	- Allowlist (_OUTBOX_OPS) — KHÔNG dispatch endpoint tùy ý.
+	- Idempotent theo idempotency_key (BR-M12-1): đã OK → 'Skipped', không áp lại.
+	- Server BR vẫn chạy (BR-M12-2): lỗi nghiệp vụ → 'Failed' + message BR-XX (không nuốt);
+	  lỗi hệ thống → log_error + message hằng (không leak traceback).
+	Trả {results:[{idempotency_key, status, ...}], applied, failed}.
+	"""
+	ops = json.loads(operations) if isinstance(operations, str) else (operations or [])
+	results = []
+	applied = 0
+	failed = 0
+	for op in ops:
+		op = op or {}
+		key = op.get("idempotency_key")
+		name = op.get("operation")
+		payload = op.get("payload") or {}
+		if _outbox_done(key):
+			results.append({"idempotency_key": key, "status": "Skipped"})
+			continue
+		if name not in _OUTBOX_OPS:
+			results.append({"idempotency_key": key, "status": "Rejected", "error": "operation không hợp lệ"})
+			failed += 1
+			continue
+		try:
+			fn = frappe.get_attr(_OUTBOX_OPS[name])
+			res = fn(**payload)
+			_log_sync(key, "OK")
+			applied += 1
+			results.append({"idempotency_key": key, "status": "OK", "result": res})
+		except frappe.ValidationError as e:  # lỗi nghiệp vụ BR-XX — message dành cho người dùng
+			_log_sync(key, "Failed", str(e))
+			failed += 1
+			results.append({"idempotency_key": key, "status": "Failed", "error": str(e)})
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "M12 apply_outbox")
+			_log_sync(key, "Failed", "Lỗi hệ thống")
+			failed += 1
+			results.append({"idempotency_key": key, "status": "Failed", "error": "Lỗi hệ thống"})
+	return {"results": results, "applied": applied, "failed": failed}
