@@ -147,6 +147,8 @@ before_uninstall = "antmed_crm.uninstall.before_uninstall"
 permission_query_conditions = {
 	"CRM Lead": "antmed_crm.permissions.org_hierarchy.get_lead_permission_query_conditions",
 	"CRM Deal": "antmed_crm.permissions.org_hierarchy.get_deal_permission_query_conditions",
+	# M14-S3a — BR-13 data-scope owner-based (NV chỉ thấy phiếu giao mình phụ trách; admin/QL bypass).
+	"AntMed Delivery": "antmed_crm.permissions.antmed_scope.delivery_scope",
 }
 
 has_permission = {
