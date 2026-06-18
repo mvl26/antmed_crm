@@ -254,7 +254,57 @@ def handover(
 			if qty:
 				contract_hooks.consume_quota(doc.contract, line.item, qty, do_ref=name)
 
+	# Wire M04→M03: ghi sổ tồn tiêu hao ca mổ (best-effort — KHÔNG vỡ bàn giao nếu lỗi/thiếu kho).
+	_post_delivery_consumption(doc)
+
 	return {"name": name, "status": doc.status, "sla_status": doc.sla_status, "delivered_at": str(doc.delivered_at)}
+
+
+def _post_delivery_consumption(doc) -> None:
+	"""Bàn giao → sinh AntMed Stock Entry 'Giao phòng mổ' trừ kho cá nhân NV theo lô (M04→M03 ledger).
+
+	Để chuỗi truy vết/sổ tồn nhất quán: lô rời kho cá nhân NV khi tiêu hao tại ca mổ. Phiếu link
+	`delivery` (FK đóng gap kiến trúc). GUARDED + idempotent + BEST-EFFORT:
+	- Chỉ ghi khi NV phụ trách CÓ kho cá nhân (warehouse_type='Cá nhân NV', employee=assigned). Không có
+	  → bỏ qua (bàn giao vẫn thành công, ledger không có dòng — tránh vỡ flow M04 cũ chưa có kho NV).
+	- Idempotent: phiếu giao đã có Stock Entry 'Giao phòng mổ' (docstatus 1) → bỏ qua (không nhân đôi).
+	- Best-effort: bất kỳ lỗi nào (thiếu tồn / lô recall-hết hạn bị gate / validate) → log, KHÔNG raise
+	  (bàn giao là sự kiện pháp lý chính; ghi sổ là phụ). Lỗi gate recall/HSD vẫn được log để hậu kiểm.
+	"""
+	try:
+		if not doc.get("assigned_employee"):
+			return
+		nv_wh = frappe.db.get_value(
+			"AntMed Warehouse",
+			{"warehouse_type": "Cá nhân NV", "employee": doc.assigned_employee, "disabled": 0},
+			"name",
+		)
+		if not nv_wh:
+			return
+		if frappe.db.exists("AntMed Stock Entry", {"delivery": doc.name, "docstatus": 1}):
+			return
+		items = [
+			{"item": l.item, "lot": l.lot, "qty": _line_qty(l)}
+			for l in doc.items
+			if l.get("lot") and _line_qty(l) > 0
+		]
+		if not items:
+			return
+		se = frappe.get_doc(
+			{
+				"doctype": "AntMed Stock Entry",
+				"entry_type": "Giao phòng mổ",
+				"from_warehouse": nv_wh,
+				"nv_employee": doc.assigned_employee,
+				"hospital": doc.hospital,
+				"delivery": doc.name,
+				"items": items,
+			}
+		)
+		se.insert(ignore_permissions=True)
+		se.submit()
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "M04 handover→M03 stock consumption failed")
 
 
 # Cột kanban B1 (mockup B1): gom 7 status nội bộ → ĐÚNG 4 lane. 'Từ chối' KHÔNG lên board.

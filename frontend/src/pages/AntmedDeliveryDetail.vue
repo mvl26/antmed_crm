@@ -1,23 +1,27 @@
 <template>
-  <main class="flex h-full flex-col" aria-labelledby="antmed-delivery-detail-title">
+  <main
+    class="flex h-full flex-col"
+    aria-labelledby="antmed-delivery-detail-title"
+  >
     <!-- Header -->
     <header
       class="flex flex-col gap-3 border-b border-outline-gray-modals px-6 py-4"
     >
       <div class="flex items-center gap-2">
-        <Button
-          variant="ghost"
-          :label="__('Quay lại')"
-          @click="goBack"
-        >
+        <Button variant="ghost" :label="__('Quay lại')" @click="goBack">
           <template #prefix>
             <FeatherIcon name="arrow-left" class="h-4 w-4" />
           </template>
         </Button>
       </div>
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div
+        class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+      >
         <div class="flex flex-col gap-1">
-          <h1 id="antmed-delivery-detail-title" class="text-xl font-semibold text-ink-gray-9">
+          <h1
+            id="antmed-delivery-detail-title"
+            class="text-xl font-semibold text-ink-gray-9"
+          >
             {{ __('Phiếu giao') }} {{ name }}
           </h1>
           <p class="text-p-sm text-ink-gray-6">
@@ -88,7 +92,9 @@
         class="flex items-center justify-center gap-2 py-16 text-ink-gray-6"
       >
         <LoadingIndicator class="h-4 w-4" />
-        <span class="text-p-base">{{ __('Đang tải chi tiết phiếu giao…') }}</span>
+        <span class="text-p-base">{{
+          __('Đang tải chi tiết phiếu giao…')
+        }}</span>
       </div>
 
       <!-- Error -->
@@ -97,15 +103,26 @@
         class="flex flex-col items-center gap-3 py-16 text-center"
         role="alert"
       >
-        <Badge variant="subtle" theme="red" size="lg" :label="__('Không tải được')" />
+        <Badge
+          variant="subtle"
+          theme="red"
+          size="lg"
+          :label="__('Không tải được')"
+        />
         <p class="max-w-md text-p-sm text-ink-gray-6">{{ errorMessage }}</p>
-        <Button variant="outline" :label="__('Thử lại')" @click="detail.reload()" />
+        <Button
+          variant="outline"
+          :label="__('Thử lại')"
+          @click="detail.reload()"
+        />
       </div>
 
       <!-- Data -->
       <div v-else-if="detail.data" class="flex flex-col gap-6">
         <!-- Thông tin chung -->
-        <dl class="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+        <dl
+          class="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
+        >
           <div v-for="f in fields" :key="f.label" class="flex flex-col gap-0.5">
             <dt class="text-p-sm text-ink-gray-5">{{ f.label }}</dt>
             <dd class="text-p-base text-ink-gray-8">{{ f.value }}</dd>
@@ -123,34 +140,97 @@
           >
             {{ __('Phiếu chưa có dòng vật tư nào.') }}
           </div>
-          <table v-else class="w-full border-separate border-spacing-0 text-left">
-            <caption class="sr-only">{{ __('Danh sách vật tư trong phiếu giao') }}</caption>
+          <table
+            v-else
+            class="w-full border-separate border-spacing-0 text-left"
+          >
+            <caption class="sr-only">
+              {{
+                __('Danh sách vật tư trong phiếu giao')
+              }}
+            </caption>
             <thead>
               <tr class="text-p-sm text-ink-gray-6">
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">{{ __('Vật tư') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">{{ __('Lô') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">{{ __('ĐVT') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right">{{ __('SL yêu cầu') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right">{{ __('SL giao') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right">{{ __('SL dùng') }}</th>
-                <th class="border-b border-outline-gray-modals py-2 font-medium text-right">{{ __('SL trả') }}</th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+                >
+                  {{ __('Vật tư') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+                >
+                  {{ __('Lô') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+                >
+                  {{ __('ĐVT') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right"
+                >
+                  {{ __('SL yêu cầu') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right"
+                >
+                  {{ __('SL giao') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 pr-4 font-medium text-right"
+                >
+                  {{ __('SL dùng') }}
+                </th>
+                <th
+                  class="border-b border-outline-gray-modals py-2 font-medium text-right"
+                >
+                  {{ __('SL trả') }}
+                </th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(it, idx) in items" :key="idx" class="text-p-base text-ink-gray-8">
-                <td class="border-b border-outline-gray-1 py-3 pr-4 font-medium text-ink-gray-9">
+              <tr
+                v-for="(it, idx) in items"
+                :key="idx"
+                class="text-p-base text-ink-gray-8"
+              >
+                <td
+                  class="border-b border-outline-gray-1 py-3 pr-4 font-medium text-ink-gray-9"
+                >
                   {{ it.item_name || it.item || '—' }}
                 </td>
-                <td class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7">{{ it.lot || '—' }}</td>
-                <td class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7">{{ it.uom || '—' }}</td>
-                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">{{ fmtQty(it.requested_qty) }}</td>
-                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">{{ fmtQty(it.delivered_qty) }}</td>
-                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">{{ fmtQty(it.consumed_qty) }}</td>
-                <td class="border-b border-outline-gray-1 py-3 text-right">{{ fmtQty(it.returned_qty) }}</td>
+                <td
+                  class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7"
+                >
+                  {{ it.lot || '—' }}
+                </td>
+                <td
+                  class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7"
+                >
+                  {{ it.uom || '—' }}
+                </td>
+                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">
+                  {{ fmtQty(it.requested_qty) }}
+                </td>
+                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">
+                  {{ fmtQty(it.delivered_qty) }}
+                </td>
+                <td class="border-b border-outline-gray-1 py-3 pr-4 text-right">
+                  {{ fmtQty(it.consumed_qty) }}
+                </td>
+                <td class="border-b border-outline-gray-1 py-3 text-right">
+                  {{ fmtQty(it.returned_qty) }}
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <!-- Hoạt động: Ghi chú + Công việc gắn phiếu giao này (port FCRM Note + CRM Task → AntMed). -->
+        <AntmedActivityPanel
+          reference-doctype="AntMed Delivery"
+          :reference-docname="name"
+        />
       </div>
     </section>
   </main>
@@ -159,8 +239,16 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Badge, Button, FeatherIcon, FormControl, createResource, toast } from 'frappe-ui'
+import {
+  Badge,
+  Button,
+  FeatherIcon,
+  FormControl,
+  createResource,
+  toast,
+} from 'frappe-ui'
 import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
+import AntmedActivityPanel from '@/components/Antmed/AntmedActivityPanel.vue'
 import {
   getDelivery,
   DELIVERY_STATUS_THEME,
@@ -181,7 +269,9 @@ const items = computed(() => detail.data?.items || [])
 
 // ── S2: hành động vòng đời (BE delivery.assign / start_transit / handover, POST qua .submit) ──
 const status = computed(() => detail.data?.status || '')
-const canAssign = computed(() => ['Nháp', 'Đã phân loại'].includes(status.value))
+const canAssign = computed(() =>
+  ['Nháp', 'Đã phân loại'].includes(status.value),
+)
 const canStart = computed(() => status.value === 'Đã gán NV')
 const canHandover = computed(() => status.value === 'Đang giao')
 
@@ -209,7 +299,10 @@ const assignRes = createResource({
 })
 function doAssign() {
   if (!selectedEmployee.value) return
-  assignRes.submit({ name: props.name, assigned_employee: selectedEmployee.value })
+  assignRes.submit({
+    name: props.name,
+    assigned_employee: selectedEmployee.value,
+  })
 }
 
 const startRes = createResource({
@@ -224,7 +317,8 @@ function doStart() {
 const handoverRes = createResource({
   url: 'antmed_crm.api.antmed.delivery.handover',
   onSuccess: () => reloadAfter(__('Đã bàn giao phòng mổ')),
-  onError: (err) => toast.error(err?.messages?.[0] || __('Không bàn giao được')),
+  onError: (err) =>
+    toast.error(err?.messages?.[0] || __('Không bàn giao được')),
 })
 function doHandover() {
   handoverRes.submit({ name: props.name })
@@ -240,7 +334,10 @@ const fields = computed(() => {
     { label: __('Giờ phẫu thuật'), value: formatDateTime(d.surgery_datetime) },
     { label: __('SLA (phút)'), value: d.sla_minutes ?? '—' },
     { label: __('Hợp đồng'), value: d.contract || '—' },
-    { label: __('Nhân viên'), value: d.assigned_employee_name || __('Chưa gán') },
+    {
+      label: __('Nhân viên'),
+      value: d.assigned_employee_name || __('Chưa gán'),
+    },
     { label: __('Đã giao lúc'), value: formatDateTime(d.delivered_at) },
     { label: __('Ghi chú'), value: d.notes || '—' },
   ]
