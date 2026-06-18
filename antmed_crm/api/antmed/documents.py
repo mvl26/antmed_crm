@@ -19,6 +19,12 @@ CERTIFICATE_DOCTYPE = "AntMed Certificate"
 LOT_DOCTYPE = "AntMed Lot"
 EINVOICE_DOCTYPE = "AntMed E-Invoice"
 PROVIDER_DOCTYPE = "AntMed E-Invoice Provider"
+HANDOVER_DOCTYPE = "AntMed Handover Confirmation"
+
+# Trạng thái bundle đã phát hành → vào màn đối soát ký nhận.
+HANDOVER_REVIEW_STATUSES = ("Đã phát hành", "Đã gửi BV", "BV đã ký nhận")
+HANDOVER_LIST_FIELDS = ["name", "delivery", "hospital", "hospital.hospital_name as hospital_name", "status"]
+HANDOVER_LIST_ITEM_KEYS = ("name", "delivery", "hospital", "hospital_name", "status")
 
 EINVOICE_LIST_FIELDS = ["name", "delivery", "provider", "status", "ma_cqt", "signed_at"]
 EINVOICE_LIST_ITEM_KEYS = ("name", "delivery", "provider", "status", "ma_cqt", "signed_at")
@@ -395,3 +401,60 @@ def get_provider_settings() -> dict:
 		# CHỈ bool — api_key (Password) KHÔNG bao giờ đưa vào response (BR-INT-01).
 		out[f"{prov}_configured"] = bool(s.get_password(f"{prov}_api_key", raise_exception=False))
 	return out
+
+
+@frappe.whitelist(methods=["POST"])
+def confirm_handover(delivery: str, hospital_contact: str | None = None, signature_file: str | None = None) -> dict:
+	"""BV ký nhận chứng từ → tạo + submit AntMed Handover Confirmation (hash chống sửa), bundle 'BV đã ký nhận'.
+
+	Idempotent: 1 xác nhận / phiếu giao. (Audit hash-chain đầy đủ ở M14.)
+	"""
+	if not frappe.has_permission(HANDOVER_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền xác nhận ký nhận."), frappe.PermissionError)
+	existing = frappe.db.get_value(HANDOVER_DOCTYPE, {"delivery": delivery}, "name")
+	if existing:
+		return {"handover": existing, "status": "BV đã ký nhận", "hash": frappe.db.get_value(HANDOVER_DOCTYPE, existing, "hash_sha256")}
+
+	import hashlib
+
+	from frappe.utils import now_datetime
+
+	bundle = frappe.db.get_value(DOCUMENT_DOCTYPE, {"delivery": delivery}, "name")
+	signed_at = now_datetime()
+	hc = frappe.get_doc(
+		{
+			"doctype": HANDOVER_DOCTYPE,
+			"delivery": delivery,
+			"document_bundle": bundle,
+			"hospital_contact": hospital_contact,
+			"signature_file": signature_file,
+			"signed_at": signed_at,
+		}
+	)
+	hc.hash_sha256 = hashlib.sha256(f"{delivery}|{hospital_contact}|{signed_at}".encode()).hexdigest()
+	hc.insert(ignore_permissions=True)
+	hc.submit()
+	if bundle:
+		frappe.db.set_value(DOCUMENT_DOCTYPE, bundle, "status", "BV đã ký nhận")
+		if frappe.db.exists(QUEUE_DOCTYPE, delivery):
+			frappe.db.set_value(QUEUE_DOCTYPE, delivery, "status", "BV đã ký nhận")
+	return {"handover": hc.name, "status": "BV đã ký nhận", "hash": hc.hash_sha256}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_handover_review(start: int = 0, page_length: int = 20) -> dict:
+	"""Màn đối soát ký nhận: bundle đã phát hành/đã gửi/đã ký. Trả RAW {data, total_count} count==rows."""
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	conditions = [["status", "in", list(HANDOVER_REVIEW_STATUSES)]]
+	rows = frappe.get_list(
+		DOCUMENT_DOCTYPE,
+		filters=conditions,
+		fields=HANDOVER_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by=f"`tab{DOCUMENT_DOCTYPE}`.modified desc",
+	)
+	data = [{k: r.get(k) for k in HANDOVER_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(DOCUMENT_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
