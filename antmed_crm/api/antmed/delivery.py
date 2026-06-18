@@ -97,17 +97,21 @@ def list_deliveries(
 	hospital: str | None = None,
 	start: int = 0,
 	page_length: int = 20,
+	search: str | None = None,
 ) -> dict:
 	"""Danh sách phiếu giao phòng mổ. Trả RAW {data, total_count} — count==rows khi page_length=0.
 
 	Mỗi item gồm ĐÚNG 8 field: name, hospital, hospital_name, doctor, surgery_datetime,
 	status, sla_status, assigned_employee. hospital_name resolve qua Link (dotted-fetch).
+	- search: lọc theo name (mã DO, LIKE %search%).
 	"""
 	conditions = _coerce_filters(filters)
 	if status:
 		conditions.append(["status", "=", status])
 	if hospital:
 		conditions.append(["hospital", "=", hospital])
+	if search:
+		conditions.append(["name", "like", f"%{search}%"])
 
 	start = max(0, int(start))
 	page_length = max(0, int(page_length))
