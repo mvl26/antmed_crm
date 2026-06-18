@@ -599,6 +599,79 @@ export function cocqChipLabel(cocqOk) {
 }
 
 /**
+ * M03-S4 (mockup C2 Wizard "Xuất cho NV") — dòng vật tư THIẾU CO/CQ → chặn xuất (HARD-BLOCK ở FE,
+ * BR-03 BE chỉ set cờ cocq_ok derived + warn; spec gate hard-block ở wizard). Dòng bị chặn khi
+ * `requires_cocq` (VTYT bắt buộc CO/CQ) VÀ `cocq_ok !== true` (chưa đủ chứng từ). FE KHÔNG tự suy
+ * requires_cocq/cocq_ok (BE đã quyết qua scan_lot) — chỉ ĐỌC cờ để bật alert + disable nút.
+ *
+ * @param {object|null|undefined} row - 1 dòng đã quét (có requires_cocq + cocq_ok từ scan_lot).
+ * @returns {boolean} true = dòng bị chặn (thiếu CO/CQ bắt buộc).
+ */
+export function rowBlockedByCocq(row) {
+  if (!row || typeof row !== 'object') return false
+  const requires = Number(row.requires_cocq) === 1 || row.requires_cocq === true
+  return requires && row.cocq_ok !== true
+}
+
+/**
+ * M03-S4 — danh sách dòng bị chặn vì thiếu CO/CQ (dùng cho alert đỏ + disable nút 'Xuất').
+ * Mảng rỗng / không phải mảng → [] (không vỡ).
+ *
+ * @param {Array<object>|null|undefined} rows
+ * @returns {Array<object>} các dòng bị chặn.
+ */
+export function blockedCocqRows(rows) {
+  if (!Array.isArray(rows)) return []
+  return rows.filter(rowBlockedByCocq)
+}
+
+/**
+ * M03-S5 (mockup "📊 Kiểm kê") — chênh lệch live của 1 dòng = counted − system (FE tính TRÌNH BÀY;
+ * variance authoritative do BE controller tính tại submit). null/NaN → 0 (không vỡ).
+ *
+ * @param {number|string|null|undefined} countedQty
+ * @param {number|string|null|undefined} systemQty
+ * @returns {number} chênh lệch (có thể âm).
+ */
+export function countVariance(countedQty, systemQty) {
+  // null/undefined/'' = chưa nhập → coi như 0 chênh lệch (KHÔNG Number(null)===0 ra chênh sai).
+  const empty = (x) => x === null || x === undefined || x === ''
+  if (empty(countedQty) || empty(systemQty)) return 0
+  const c = Number(countedQty)
+  const s = Number(systemQty)
+  if (!Number.isFinite(c) || !Number.isFinite(s)) return 0
+  return c - s
+}
+
+/** M03-S5 — class màu chênh lệch: >0 xanh · <0 đỏ · =0 trung tính (kèm số → không chỉ màu). */
+export function varianceTextClass(variance) {
+  const v = Number(variance)
+  if (Number.isFinite(v) && v > 0) return 'text-green-700'
+  if (Number.isFinite(v) && v < 0) return 'text-red-700'
+  return 'text-ink-gray-7'
+}
+
+/**
+ * M03-S5 — nhãn docstatus phiếu Kiểm kê (Frappe docstatus 0/1/2 → VI). KEY khớp docstatus chuẩn
+ * Frappe (KHÔNG chuỗi EN ra UI): 0 → 'Nháp' · 1 → 'Đã chốt' · 2 → 'Đã huỷ'. Lạ → 'Nháp'.
+ */
+export const DOCSTATUS_LABEL = {
+  0: 'Nháp',
+  1: 'Đã chốt',
+  2: 'Đã huỷ',
+}
+export function docstatusLabel(docstatus) {
+  return DOCSTATUS_LABEL[Number(docstatus)] || 'Nháp'
+}
+/** M03-S5 — theme Badge docstatus: 0 nháp(gray) · 1 chốt(green) · 2 huỷ(red). */
+export function docstatusTheme(docstatus) {
+  const d = Number(docstatus)
+  if (d === 1) return 'green'
+  if (d === 2) return 'red'
+  return 'gray'
+}
+
+/**
  * M02-7 — width style cho thanh "Cơ cấu doanh thu" (widget CEO, mockup A2). PURE:
  *   width = clamp(pct, 0, 100) + '%'. null/undefined/NaN/chuỗi-không-số → 0% (không vỡ).
  * KHÔNG đổi màu theo lớp (cơ cấu doanh thu = 1 màu brand, KHÔNG ngưỡng green/orange/red như

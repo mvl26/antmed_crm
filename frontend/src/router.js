@@ -93,6 +93,13 @@ const routes = [
     component: () => import('@/pages/AntmedStockEntryDetail.vue'),
   },
   {
+    // M03 D3: màn danh sách & lọc lô (item/HSD/recall) + drill 'Truy vết' (?lot=).
+    path: '/antmed/warehouse/lots',
+    name: 'AntmedLotList',
+    meta: { role: 'warehouse' },
+    component: () => import('@/pages/AntmedLotList.vue'),
+  },
+  {
     // M03-2: màn "Thông tin lot" (mockup D3 left-card) — real-data, render trong AntmedLayout
     // (isAntmedPath '/antmed/*'). meta.role='warehouse' ⇒ sidebar kho (wh-lot-trace active).
     path: '/antmed/warehouse/lot-trace',
@@ -115,6 +122,28 @@ const routes = [
     name: 'AntmedExpiryAlerts',
     meta: { role: 'warehouse' },
     component: () => import('@/pages/AntmedExpiryAlerts.vue'),
+  },
+  {
+    // M03-S4: Wizard "Xuất cho NV" (mockup C2) — quét QR + FIFO + chip CO/CQ → lập phiếu xuất.
+    // real-data, render trong AntmedLayout. meta.role='warehouse' ⇒ sidebar kho (wh-export active).
+    path: '/antmed/warehouse/issue',
+    name: 'AntmedStockIssue',
+    meta: { role: 'warehouse' },
+    component: () => import('@/pages/AntmedStockIssue.vue'),
+  },
+  {
+    // M03-S4: "Nhập kho" từ NCC — quét QR + SL/đơn giá → lập phiếu nhập (đơn giản, KHÔNG gate CO/CQ).
+    path: '/antmed/warehouse/import',
+    name: 'AntmedStockReceipt',
+    meta: { role: 'warehouse' },
+    component: () => import('@/pages/AntmedStockReceipt.vue'),
+  },
+  {
+    // M03-S5: "Kiểm kê" — snapshot tồn × SL thực đếm × chênh lệch live → chốt điều chỉnh sổ tồn.
+    path: '/antmed/warehouse/stock-count',
+    name: 'AntmedStockCount',
+    meta: { role: 'warehouse' },
+    component: () => import('@/pages/AntmedStockCount.vue'),
   },
   {
     // M05 I1: bảng vòng đời bộ dụng cụ (real-data instrument_loan.board).

@@ -425,19 +425,20 @@ export const ROLE_NAV = {
   ],
   warehouse: [
     {
+      // M03-S4: trỏ màn real-data "Nhập kho" từ NCC (/antmed/warehouse/import).
       key: 'wh-import',
       label: 'Nhập kho',
       icon: '📥',
-      to: '/warehouse/import',
-      enabled: false,
+      to: '/antmed/warehouse/import',
+      enabled: true,
     },
     {
-      // M03-1: trỏ màn real-data "Phiếu xuất gần đây" (/antmed/warehouse/stock-entries).
-      // Route prototype /warehouse/export giữ nguyên (no-regression) nhưng KHÔNG còn là đích nav.
+      // M03-S4: trỏ Wizard real-data "Xuất cho NV" (/antmed/warehouse/issue — quét QR + CO/CQ + FIFO).
+      // Route /antmed/warehouse/stock-entries giữ nguyên (list "Phiếu xuất gần đây") nhưng KHÔNG còn là đích nav.
       key: 'wh-export',
       label: 'Xuất cho NV',
       icon: '📤',
-      to: '/antmed/warehouse/stock-entries',
+      to: '/antmed/warehouse/issue',
       enabled: true,
     },
     {
@@ -447,6 +448,23 @@ export const ROLE_NAV = {
       label: 'Kho ký gửi BV',
       icon: '🏥',
       to: '/antmed/warehouse/consignment',
+      enabled: true,
+    },
+    {
+      // M03-S5: màn real-data "Kiểm kê" (snapshot tồn × thực đếm × chênh lệch). Thứ tự mockup:
+      // Nhập → Xuất → Ký gửi → Kiểm kê → Truy vết → Cảnh báo HSD.
+      key: 'wh-stock-count',
+      label: 'Kiểm kê',
+      icon: '📊',
+      to: '/antmed/warehouse/stock-count',
+      enabled: true,
+    },
+    {
+      // M03 D3: màn "Quản lý lot" (list + lọc + drill 'Truy vết').
+      key: 'wh-lots',
+      label: 'Quản lý lot',
+      icon: '📦',
+      to: '/antmed/warehouse/lots',
       enabled: true,
     },
     {

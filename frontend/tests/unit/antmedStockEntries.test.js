@@ -106,20 +106,22 @@ describe('M03-1 data layer — listStockEntries url list_stock_entries', () => {
   })
 })
 
-// ── Nav — ROLE_NAV.warehouse wh-export trỏ /antmed/warehouse/stock-entries ────
-describe('M03-1 nav — wh-export enabled tới /antmed/warehouse/stock-entries', () => {
-  it("ROLE_NAV.warehouse 'wh-export' to=/antmed/warehouse/stock-entries, enabled=true", () => {
+// ── Nav — ROLE_NAV.warehouse wh-export trỏ Wizard /antmed/warehouse/issue ─────
+// (M03-S4: nav 'Xuất cho NV' nâng cấp trỏ Wizard quét QR; list "Phiếu xuất gần đây"
+//  /antmed/warehouse/stock-entries vẫn truy cập được qua RouterLink trong wizard + detail.)
+describe('M03-S4 nav — wh-export enabled tới Wizard /antmed/warehouse/issue', () => {
+  it("ROLE_NAV.warehouse 'wh-export' to=/antmed/warehouse/issue, enabled=true", () => {
     const whExport = ROLE_NAV.warehouse.find((i) => i.key === 'wh-export')
     expect(whExport).toMatchObject({
-      to: '/antmed/warehouse/stock-entries',
+      to: '/antmed/warehouse/issue',
       enabled: true,
       label: 'Xuất cho NV',
     })
   })
-  it('isNavActive: active ở /antmed/warehouse/stock-entries, KHÔNG active ở /antmed', () => {
-    const item = { to: '/antmed/warehouse/stock-entries' }
-    expect(isNavActive(item, '/antmed/warehouse/stock-entries')).toBe(true)
-    expect(isNavActive({ to: '/antmed' }, '/antmed/warehouse/stock-entries')).toBe(false)
+  it('isNavActive: active ở /antmed/warehouse/issue, KHÔNG active ở /antmed', () => {
+    const item = { to: '/antmed/warehouse/issue' }
+    expect(isNavActive(item, '/antmed/warehouse/issue')).toBe(true)
+    expect(isNavActive({ to: '/antmed' }, '/antmed/warehouse/issue')).toBe(false)
   })
 })
 

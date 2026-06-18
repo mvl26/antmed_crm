@@ -116,10 +116,10 @@ describe('M03-2 nav — wh-lot-trace enabled tới /antmed/warehouse/lot-trace',
     expect(isNavActive(item, '/antmed/warehouse/lot-trace')).toBe(true)
     expect(isNavActive({ to: '/antmed' }, '/antmed/warehouse/lot-trace')).toBe(false)
   })
-  it('no-regression: các mục kho khác KHÔNG đổi (wh-export vẫn stock-entries)', () => {
-    const whExport = ROLE_NAV.warehouse.find((i) => i.key === 'wh-export')
-    expect(whExport.to).toBe('/antmed/warehouse/stock-entries')
-    expect(whExport.enabled).toBe(true)
+  it('no-regression: wh-lot-trace giữ nguyên đích + enabled (sau khi thêm wh-stock-count)', () => {
+    const whLotTrace = ROLE_NAV.warehouse.find((i) => i.key === 'wh-lot-trace')
+    expect(whLotTrace.to).toBe('/antmed/warehouse/lot-trace')
+    expect(whLotTrace.enabled).toBe(true)
   })
 })
 

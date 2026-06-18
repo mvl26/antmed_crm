@@ -176,18 +176,42 @@
                 <td class="border-b border-outline-gray-1 py-2.5 pr-4 text-ink-gray-6">{{ __('SL còn') }}</td>
                 <td class="border-b border-outline-gray-1 py-2.5 tabular-nums font-medium text-ink-gray-9">
                   {{ fmtQty(data.qty_remaining) }}
+                  <!-- Tách theo loại kho (mockup D3 "153 = Tổng 80 · Ký gửi BV 73") -->
+                  <span v-if="balanceBreakdown" class="ml-1 text-p-xs font-normal text-ink-gray-5">
+                    ({{ balanceBreakdown }})
+                  </span>
                 </td>
               </tr>
-              <!-- CO / CQ: chứng từ (hiển thị mã chứng từ; '—' nếu trống) -->
+              <!-- CO / CQ: link tải PDF nếu có file_url; fallback mã chứng từ; '—' nếu trống -->
               <tr>
                 <td class="border-b border-outline-gray-1 py-2.5 pr-4 text-ink-gray-6">{{ __('CO') }}</td>
                 <td class="border-b border-outline-gray-1 py-2.5 text-ink-gray-8">
-                  {{ data.co_cert || '—' }}
+                  <a
+                    v-if="data.co_file_url"
+                    :href="data.co_file_url"
+                    target="_blank"
+                    rel="noopener"
+                    class="rounded text-teal-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-outline-gray-3"
+                  >
+                    {{ __('Tải CO') }}<span v-if="data.co_cert" class="text-ink-gray-5"> · {{ data.co_cert }}</span>
+                  </a>
+                  <span v-else>{{ data.co_cert || '—' }}</span>
                 </td>
               </tr>
               <tr>
                 <td class="py-2.5 pr-4 text-ink-gray-6">{{ __('CQ') }}</td>
-                <td class="py-2.5 text-ink-gray-8">{{ data.cq_cert || '—' }}</td>
+                <td class="py-2.5 text-ink-gray-8">
+                  <a
+                    v-if="data.cq_file_url"
+                    :href="data.cq_file_url"
+                    target="_blank"
+                    rel="noopener"
+                    class="rounded text-teal-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-outline-gray-3"
+                  >
+                    {{ __('Tải CQ') }}<span v-if="data.cq_cert" class="text-ink-gray-5"> · {{ data.cq_cert }}</span>
+                  </a>
+                  <span v-else>{{ data.cq_cert || '—' }}</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -309,6 +333,91 @@
               </p>
             </div>
           </div>
+
+          <!-- Card "Sử dụng tại ca mổ" (phả hệ lô → giao phòng mổ → hóa đơn) — col-span 2 -->
+          <div class="rounded-lg border border-outline-gray-modals bg-surface-white p-4 lg:col-span-2">
+            <div class="mb-3 flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-ink-gray-9">{{ __('Sử dụng tại ca mổ') }}</h2>
+              <div class="flex items-center gap-2">
+                <Button
+                  variant="subtle"
+                  :label="__('Lưu vết')"
+                  :loading="saveTrace.loading"
+                  :aria-label="__('Lưu bản truy vết lô này')"
+                  @click="doSaveTrace"
+                />
+                <Button
+                  v-if="savedTraceName"
+                  variant="outline"
+                  :label="__('Tải PDF')"
+                  :loading="exportPdf.loading"
+                  :aria-label="__('Xuất PDF bản truy vết')"
+                  @click="doExportPdf"
+                />
+              </div>
+            </div>
+
+            <!-- loading / error / empty / data -->
+            <div
+              v-if="genealogy.loading"
+              class="flex items-center justify-center gap-2 py-10 text-ink-gray-6"
+              aria-live="polite"
+            >
+              <LoadingIndicator class="h-4 w-4" />
+              <span class="text-p-sm">{{ __('Đang tải phả hệ…') }}</span>
+            </div>
+            <div
+              v-else-if="genealogy.error"
+              class="flex flex-col items-center gap-2 py-10 text-center"
+              role="alert"
+            >
+              <Badge variant="subtle" theme="red" size="lg" :label="__('Không tải được phả hệ')" />
+              <Button variant="outline" :label="__('Thử lại')" @click="genealogy.reload()" />
+            </div>
+            <div
+              v-else-if="!deliveries.length"
+              class="rounded-lg border border-dashed border-outline-gray-2 py-10 text-center text-p-sm text-ink-gray-6"
+            >
+              {{ __('Chưa có ca mổ nào dùng lô này') }}
+            </div>
+            <ul v-else class="flex flex-col gap-3">
+              <li
+                v-for="d in deliveries"
+                :key="d.delivery"
+                class="rounded-lg border border-outline-gray-1 bg-surface-gray-1 p-3"
+              >
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-p-sm">
+                  <span class="font-medium text-ink-gray-9">{{ d.hospital_name || d.hospital || '—' }}</span>
+                  <span class="text-ink-gray-7">{{ __('Bác sỹ') }}: {{ d.doctor_name || d.doctor || '—' }}</span>
+                  <span class="text-ink-gray-7">{{ __('Ca mổ') }}: {{ formatStockTime(d.surgery_datetime) }}<span v-if="d.surgery_room"> · {{ d.surgery_room }}</span></span>
+                  <span class="tabular-nums text-ink-gray-8">{{ __('SL dùng') }}: {{ fmtQty(d.used_qty) }}</span>
+                </div>
+                <div class="mt-1.5 flex flex-wrap items-center gap-2 text-p-xs text-ink-gray-5">
+                  <span>{{ __('Phiếu giao') }}: {{ d.delivery }}</span>
+                  <template v-if="d.einvoice">
+                    <span class="text-ink-gray-4" aria-hidden="true">·</span>
+                    <span>{{ __('Hóa đơn') }}: {{ d.einvoice }}</span>
+                    <span
+                      v-if="d.einvoice_status"
+                      class="inline-flex items-center rounded-full bg-ink-gray-2 px-2 py-0.5 text-ink-gray-7"
+                    >
+                      {{ d.einvoice_status }}
+                    </span>
+                    <a
+                      v-if="d.einvoice_pdf"
+                      :href="d.einvoice_pdf"
+                      target="_blank"
+                      rel="noopener"
+                      class="rounded text-teal-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-outline-gray-3"
+                    >
+                      {{ __('Tải HĐ') }}
+                    </a>
+                  </template>
+                  <span v-else>{{ __('Chưa xuất hóa đơn') }}</span>
+                </div>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     </section>
@@ -385,13 +494,21 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, ref, onMounted } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
 import { Badge, Button, Dialog, FormControl, toast } from 'frappe-ui'
 import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
-import { getLot, getLotTrace, initiateRecall as createInitiateRecall } from '@/data/antmed'
+import {
+  getLot,
+  getLotTrace,
+  getLotGenealogy,
+  saveLotTrace as createSaveLotTrace,
+  exportLotTracePdf as createExportLotTracePdf,
+  initiateRecall as createInitiateRecall,
+} from '@/data/antmed'
 import {
   fmtDate,
+  formatStockTime,
   recallChipClass,
   entryDirectionLabel,
   traceDirectionChipClass,
@@ -414,6 +531,54 @@ const trace = getLotTrace({ auto: false })
 const data = computed(() => lot.data || null)
 // events đã sort posting_datetime ASC ở BE → FE KHÔNG sort lại. r.data.events (dict THƯỜNG).
 const events = computed(() => trace.data?.events || [])
+
+// ── M03 D3: phả hệ ca mổ (lô → Delivery → hóa đơn) + lưu vết + route query ──
+const route = useRoute()
+const genealogy = getLotGenealogy({ auto: false })
+const deliveries = computed(() => genealogy.data?.deliveries || [])
+const saveTrace = createSaveLotTrace({ auto: false })
+const exportPdf = createExportLotTracePdf({ auto: false })
+// Tên bản truy vết vừa lưu → mở nút "Tải PDF".
+const savedTraceName = ref('')
+
+// SL còn tách theo loại kho (mockup D3 "153 = Tổng 80 · Ký gửi BV 73"). BE đã GROUP BY → FE chỉ nối.
+const balanceByType = computed(() => data.value?.balance_by_warehouse_type || [])
+const balanceBreakdown = computed(() =>
+  balanceByType.value.map((b) => `${b.warehouse_type} ${fmtQty(b.qty)}`).join(' · '),
+)
+
+function doSaveTrace() {
+  if (!data.value) return
+  saveTrace.submit(
+    { lot: data.value.name },
+    {
+      onSuccess(res) {
+        savedTraceName.value = res?.name || ''
+        toast.success(__('Đã lưu bản truy vết {0}', [savedTraceName.value]))
+      },
+      onError(err) {
+        toast.error(err?.messages?.[0] || __('Không lưu được bản truy vết'))
+      },
+    },
+  )
+}
+
+// Xuất PDF bản vừa lưu → mở file để tải.
+function doExportPdf() {
+  if (!savedTraceName.value) return
+  exportPdf.submit(
+    { name: savedTraceName.value },
+    {
+      onSuccess(res) {
+        if (res?.exported_pdf) window.open(res.exported_pdf, '_blank')
+        toast.success(__('Đã xuất PDF truy vết'))
+      },
+      onError(err) {
+        toast.error(err?.messages?.[0] || __('Không xuất được PDF'))
+      },
+    },
+  )
+}
 
 // Số lượng: hiển thị số nguyên VI có phân tách (1.000); thiếu/NaN → '—'.
 function fmtQty(value) {
@@ -456,7 +621,17 @@ function submitTrace() {
   hasSubmitted.value = true
   lot.submit({ name })
   trace.submit({ name })
+  genealogy.submit({ name })
 }
+
+// Drill-down từ màn "Quản lý lot": ?lot=<lot_no> → auto điền + truy vết ngay.
+onMounted(() => {
+  const q = (route.query.lot || '').toString().trim()
+  if (q) {
+    lotInput.value = q
+    submitTrace()
+  }
+})
 
 // Lỗi quyền (PermissionError) hoặc lỗi khác → toast (ngoài banner tri-branch). Not-found
 // đã có nhánh riêng nên KHÔNG toast (tránh nhiễu cho trường hợp gõ sai mã).
@@ -505,8 +680,18 @@ function submitRecall() {
   initiateRecall.submit(
     { lot: data.value.name, reason, status: recallStatus.value },
     {
-      onSuccess() {
-        toast.success(__('Đã khởi tạo recall cho lô ') + (data.value?.lot_no || ''))
+      onSuccess(res) {
+        // BE 'Đã thu hồi' tự sinh Recall Notification + đếm BV ảnh hưởng (res.affected_hospitals).
+        if (res?.recall_notification) {
+          toast.success(
+            __('Đã thu hồi lô {0} — {1} BV ảnh hưởng đã được thông báo', [
+              data.value?.lot_no || '',
+              res?.affected_hospitals ?? 0,
+            ]),
+          )
+        } else {
+          toast.success(__('Đã khởi tạo recall cho lô {0}', [data.value?.lot_no || '']))
+        }
         showRecallModal.value = false
         recallReason.value = ''
         recallSubmitted.value = false
