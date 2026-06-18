@@ -253,9 +253,36 @@ def handover(
 	return {"name": name, "status": doc.status, "sla_status": doc.sla_status, "delivered_at": str(doc.delivered_at)}
 
 
+# Cột kanban B1 (mockup B1): gom 7 status nội bộ → ĐÚNG 4 lane. 'Từ chối' KHÔNG lên board.
+DISPATCH_LANES = (
+	("new", "Mới tiếp nhận", ("Nháp", "Đã phân loại")),
+	("assigned", "Đã gán NV", ("Đã gán NV",)),
+	("in_transit", "Đang giao", ("Đang giao",)),
+	("handed", "Đã bàn giao", ("Đã bàn giao", "Đã đóng")),
+)
+
+
+def _dispatch_urgency(row: dict, now) -> str:
+	"""urgent = chưa bàn giao & sắp/quá giờ mổ (≤60'); warn = SLA Late; ok = còn lại."""
+	if row.get("status") in ("Đã bàn giao", "Đã đóng"):
+		return "ok"
+	if row.get("sla_status") == "Late":
+		return "warn"
+	sdt = row.get("surgery_datetime")
+	if sdt and (get_datetime(sdt) - now).total_seconds() / 60.0 <= 60:
+		return "urgent"
+	return "ok"
+
+
 @frappe.whitelist(methods=["GET"])
 def dispatch_board(hospital: str | None = None) -> dict:
-	"""Bảng điều phối (kanban): gom phiếu theo cột trạng thái. count==rows dưới DocPerm."""
+	"""Bảng điều phối ca giao phòng mổ (mockup B1) — kanban AntMed Delivery theo trạng thái.
+
+	Trả `columns` (1 cột/status — count==rows dưới DocPerm, giữ tương thích) + `lanes`
+	(gom ĐÚNG 4 cột B1; 'Từ chối' loại) + `total` + `totals{total,urgent}`. card enrich:
+	+ doctor_name, sku_count, assigned_employee_name, urgency('urgent'|'warn'|'ok').
+	Đọc DƯỚI permission (BR-13 fail-closed): NV chỉ thấy ca trong phạm vi.
+	"""
 	conditions = []
 	if hospital:
 		conditions.append(["hospital", "=", hospital])
@@ -266,10 +293,58 @@ def dispatch_board(hospital: str | None = None) -> dict:
 		limit_page_length=0,
 		order_by=f"`tab{DELIVERY_DOCTYPE}`.surgery_datetime asc",
 	)
+	names = [r["name"] for r in rows]
+
+	# sku_count = số dòng items mỗi phiếu (1 query gộp — tránh N+1).
+	sku_by_parent: dict[str, int] = {}
+	if names:
+		for it in frappe.get_all(
+			"AntMed Delivery Item", filters={"parent": ["in", names]}, fields=["parent"], limit_page_length=0
+		):
+			sku_by_parent[it["parent"]] = sku_by_parent.get(it["parent"], 0) + 1
+
+	_cache: dict = {}
+
+	def _resolve(doctype: str, key, field: str):
+		if not key:
+			return None
+		ck = (doctype, key)
+		if ck not in _cache:
+			_cache[ck] = frappe.db.get_value(doctype, key, field)
+		return _cache[ck]
+
+	now = now_datetime()
+
+	def _card(r: dict) -> dict:
+		card = {k: r.get(k) for k in DELIVERY_LIST_ITEM_KEYS}
+		card.update(
+			{
+				"delivery": r["name"],
+				"doctor_name": _resolve(DOCTOR_DOCTYPE, r.get("doctor"), "full_name"),
+				"sku_count": sku_by_parent.get(r["name"], 0),
+				"assigned_employee_name": _resolve("User", r.get("assigned_employee"), "full_name"),
+				"urgency": _dispatch_urgency(r, now),
+			}
+		)
+		return card
+
 	board: dict = {}
 	for r in rows:
-		board.setdefault(r.get("status"), []).append({k: r.get(k) for k in DELIVERY_LIST_ITEM_KEYS})
-	return {"columns": [{"status": s, "items": board.get(s, [])} for s in STATUS_ORDER], "total": len(rows)}
+		board.setdefault(r.get("status"), []).append(_card(r))
+
+	columns = [{"status": s, "items": board.get(s, [])} for s in STATUS_ORDER]
+	lanes = []
+	for key, label, statuses in DISPATCH_LANES:
+		cards = [c for s in statuses for c in board.get(s, [])]
+		lanes.append({"key": key, "label": label, "count": len(cards), "cards": cards})
+	urgent = sum(1 for lane in lanes for c in lane["cards"] if c["urgency"] == "urgent")
+
+	return {
+		"columns": columns,
+		"lanes": lanes,
+		"total": len(rows),
+		"totals": {"total": sum(lane["count"] for lane in lanes), "urgent": urgent},
+	}
 
 
 @frappe.whitelist(methods=["GET"])
