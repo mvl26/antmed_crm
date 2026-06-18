@@ -314,6 +314,10 @@ GET_LOT_KEYS = {
 	"qty_in",
 	"qty_out",
 	"qty_remaining",
+	# M03 D3 enrich: link tải CO/CQ + SL còn tách theo loại kho.
+	"co_file_url",
+	"cq_file_url",
+	"balance_by_warehouse_type",
 }
 
 
@@ -419,6 +423,29 @@ class TestAntMedGetLot(FrappeTestCase):
 		self.assertEqual(res["qty_in"], 0.0)
 		self.assertEqual(res["qty_out"], 0.0)
 		self.assertEqual(res["qty_remaining"], 0.0)
+
+	def test_get_lot_balance_by_warehouse_type(self):
+		"""SL còn tách theo loại kho (mockup D3): lô nhập 100 xuất 30 ở kho Tổng → còn 70 ở 'Tổng'."""
+		res = inventory.get_lot(self.lot)
+		by_type = {b["warehouse_type"]: b["qty"] for b in res["balance_by_warehouse_type"]}
+		self.assertEqual(by_type.get("Tổng"), 70.0)
+		# SUM breakdown == qty_remaining (invariant).
+		self.assertEqual(sum(b["qty"] for b in res["balance_by_warehouse_type"]), res["qty_remaining"])
+
+	def test_get_lot_cocq_file_url(self):
+		"""co_file_url/cq_file_url resolve từ Certificate.file_url (link tải PDF mockup D3)."""
+		# Lô không gắn chứng từ → None (null-guard).
+		res = inventory.get_lot(self.lot)
+		self.assertIsNone(res["co_file_url"])
+		self.assertIsNone(res["cq_file_url"])
+		# Gắn CO có file_url → co_file_url resolve đúng.
+		cert = frappe.get_doc(
+			{"doctype": "AntMed Certificate", "cert_no": "_T-LT-CO-FILE", "cert_type": "CO",
+			 "item": self.item, "lot": self.lot, "file_url": "/files/co_test.pdf"}
+		).insert(ignore_permissions=True).name
+		frappe.db.set_value("AntMed Lot", self.lot, "co_cert", cert)
+		res2 = inventory.get_lot(self.lot)
+		self.assertEqual(res2["co_file_url"], "/files/co_test.pdf")
 
 	def test_get_lot_not_found(self):
 		"""Lô không tồn tại → DoesNotExistError (idiom get_doc, khớp get_item)."""
@@ -1512,10 +1539,14 @@ class TestAntMedInitiateRecall(FrappeTestCase):
 		).insert(ignore_permissions=True)
 
 	def test_initiate_recall_happy_recalled(self):
-		"""status='Đã thu hồi' → recall_status đổi + recall_reason ghi + return dict đúng 3 khóa."""
+		"""status='Đã thu hồi' → recall_status đổi + recall_reason ghi + tự sinh Recall Notification."""
 		lot = self._fresh_lot("_T-RC-HAPPY").name
 		res = inventory.initiate_recall(lot=lot, reason="Phát hiện lỗi tiệt khuẩn", status="Đã thu hồi")
-		self.assertEqual(set(res.keys()), {"name", "recall_status", "recall_reason"})
+		# Return 5 khóa (thêm recall_notification + affected_hospitals — auto-recall D3).
+		self.assertEqual(
+			set(res.keys()),
+			{"name", "recall_status", "recall_reason", "recall_notification", "affected_hospitals"},
+		)
 		self.assertEqual(res["name"], lot)
 		self.assertEqual(res["recall_status"], "Đã thu hồi")
 		self.assertEqual(res["recall_reason"], "Phát hiện lỗi tiệt khuẩn")
@@ -1524,6 +1555,10 @@ class TestAntMedInitiateRecall(FrappeTestCase):
 		self.assertEqual(
 			frappe.db.get_value("AntMed Lot", lot, "recall_reason"), "Phát hiện lỗi tiệt khuẩn"
 		)
+		# Tự sinh AntMed Recall Notification cho lô (BV ảnh hưởng = 0 vì lô test không có giao/ký gửi).
+		self.assertIsNotNone(res["recall_notification"])
+		self.assertTrue(frappe.db.exists("AntMed Recall Notification", res["recall_notification"]))
+		self.assertEqual(frappe.db.get_value("AntMed Recall Notification", res["recall_notification"], "lot"), lot)
 
 	def test_initiate_recall_theo_doi(self):
 		"""status='Theo dõi' → recall_status='Theo dõi' (KHÔNG phải 'Đã thu hồi')."""
@@ -1719,6 +1754,16 @@ class TestAntMedGetStockEntry(FrappeTestCase):
 		cls.wh_tong = _mk_sed_wh("_T-SED-WH-TONG", "Tổng").name
 		cls.lot = _mk_sed_lot("_T-SED-LOT", cls.item, "2028-11-30").name
 		cls.lot2 = _mk_sed_lot("_T-SED-LOT2", cls.item2, "2029-04-30").name
+		# cocq_ok do controller TỰ TÍNH (BR-03, derived read-only): lô cls.lot gắn đủ CO+CQ → cocq_ok=1;
+		# lô cls.lot2 KHÔNG có chứng từ (item requires_cocq default 1) → cocq_ok=0. (Pass-through True/False.)
+		co = frappe.get_doc(
+			{"doctype": "AntMed Certificate", "cert_no": "_T-SED-CO", "cert_type": "CO", "item": cls.item, "lot": cls.lot}
+		).insert(ignore_permissions=True).name
+		cq = frappe.get_doc(
+			{"doctype": "AntMed Certificate", "cert_no": "_T-SED-CQ", "cert_type": "CQ", "item": cls.item, "lot": cls.lot}
+		).insert(ignore_permissions=True).name
+		frappe.db.set_value("AntMed Lot", cls.lot, "co_cert", co)
+		frappe.db.set_value("AntMed Lot", cls.lot, "cq_cert", cq)
 		# Nhập tồn đủ để xuất.
 		inventory.create_stock_entry(
 			entry_type="Nhập NCC",

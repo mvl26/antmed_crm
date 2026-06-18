@@ -20,7 +20,8 @@ CONSIGNMENT_WAREHOUSE_TYPE = "Ký gửi BV"
 
 # Map loại phiếu → danh sách (warehouse_attr, dấu). 'Điều chỉnh' = +qty vào to (hoặc from).
 _RECEIPT = {"Nhập NCC", "Nhập ký gửi BV"}
-_ISSUE = {"Xuất cho NV"}
+# 'Giao phòng mổ' = trừ kho cá nhân NV theo lô khi bàn giao ca mổ (M04 handover → ledger).
+_ISSUE = {"Xuất cho NV", "Giao phòng mổ"}
 _TRANSFER = {"Chuyển kho"}
 
 
@@ -225,6 +226,126 @@ def get_expiring_balances(within_days: int = 90) -> list[dict]:
 	]
 
 
+def compute_cocq_ok(requires_cocq, co_cert, cq_cert) -> int:
+	"""BR-03: cờ CO/CQ đủ cho 1 dòng phiếu (M03 set, M06 enforce cứng phát hành).
+
+	- Vật tư KHÔNG yêu cầu CO/CQ (requires_cocq falsy) → 1 (luôn đủ, không chặn).
+	- Vật tư yêu cầu CO/CQ → 1 chỉ khi lô có CẢ co_cert VÀ cq_cert; thiếu 1 trong 2 → 0.
+	Trả int 0/1 (field Check). Pure — KHÔNG query (caller batch-fetch requires_cocq + cert).
+	"""
+	if not requires_cocq:
+		return 1
+	return 1 if (co_cert and cq_cert) else 0
+
+
+def get_fifo_lots(item: str, warehouse: str) -> list[dict]:
+	"""BR-08 — danh sách lô CÒN TỒN của (item × kho) xếp theo HSD sớm nhất trước (FIFO).
+
+	1 query gộp GROUP BY (KHÔNG N+1): SUM(qty_change) theo lô, HAVING SUM>0 (chỉ lô còn tồn).
+	ORDER BY expiry ASC (lô không HSD xuống cuối). Trả list dict {lot, lot_no, expiry_date,
+	available_qty}. item/warehouse rỗng → []. SQL param-bind %s (LL-BE-11); tên bảng = hằng .format.
+	"""
+	if not item or not warehouse:
+		return []
+	query = (
+		"SELECT sl.lot AS lot, lot.lot_no AS lot_no, lot.expiry_date AS expiry_date, "
+		"COALESCE(SUM(sl.qty_change), 0) AS available_qty "
+		"FROM `tab{ledger}` sl "
+		"LEFT JOIN `tab{lot}` lot ON lot.name = sl.lot "
+		"WHERE sl.warehouse = %s AND sl.item = %s "
+		"GROUP BY sl.lot, lot.lot_no, lot.expiry_date "
+		"HAVING SUM(sl.qty_change) > 0 "
+		"ORDER BY (lot.expiry_date IS NULL), lot.expiry_date ASC, sl.lot ASC"
+	).format(ledger=LEDGER_DOCTYPE, lot=LOT_DOCTYPE)
+	rows = frappe.db.sql(query, (warehouse, item), as_dict=True)
+	return [
+		{
+			"lot": r["lot"],
+			"lot_no": r["lot_no"],
+			"expiry_date": r["expiry_date"],
+			"available_qty": float(r["available_qty"] or 0),
+		}
+		for r in rows
+	]
+
+
+def get_lot_consignment_by_hospital(lot: str) -> list[dict]:
+	"""SL của 1 lô đang ký gửi tại từng BV (recall: BV nào còn giữ lô) — 1 query GROUP BY hospital.
+
+	JOIN Ledger × Warehouse (warehouse_type='Ký gửi BV'), GROUP BY hospital, HAVING SUM>0. Trả
+	list dict {hospital, qty}. lot rỗng → []. param-bind %s; tên bảng hằng .format (KHÔNG f-string SQL).
+	"""
+	if not lot:
+		return []
+	query = (
+		"SELECT wh.hospital AS hospital, COALESCE(SUM(sl.qty_change), 0) AS qty "
+		"FROM `tab{ledger}` sl "
+		"INNER JOIN `tab{warehouse}` wh ON wh.name = sl.warehouse "
+		"WHERE sl.lot = %s AND wh.warehouse_type = %s AND wh.hospital IS NOT NULL "
+		"GROUP BY wh.hospital "
+		"HAVING SUM(sl.qty_change) > 0"
+	).format(ledger=LEDGER_DOCTYPE, warehouse=WAREHOUSE_DOCTYPE)
+	rows = frappe.db.sql(query, (lot, CONSIGNMENT_WAREHOUSE_TYPE), as_dict=True)
+	return [{"hospital": r["hospital"], "qty": float(r["qty"] or 0)} for r in rows]
+
+
+def get_lot_balance_by_warehouse_type(lot: str) -> list[dict]:
+	"""SL còn của 1 lô TÁCH theo loại kho (mockup D3 "SL còn 153 = kho TT 80 + ký gửi BV 73").
+
+	1 query GROUP BY warehouse_type (KHÔNG N+1): SUM(qty_change) theo loại kho, HAVING SUM>0 (chỉ
+	loại kho còn tồn). Trả list dict {warehouse_type, qty} — SUM các qty == qty_remaining toàn lô.
+	lot rỗng → []. SQL param-bind %s; tên bảng hằng .format (KHÔNG f-string SQL — giữ guard grep).
+	"""
+	if not lot:
+		return []
+	query = (
+		"SELECT wh.warehouse_type AS warehouse_type, COALESCE(SUM(sl.qty_change), 0) AS qty "
+		"FROM `tab{ledger}` sl "
+		"LEFT JOIN `tab{warehouse}` wh ON wh.name = sl.warehouse "
+		"WHERE sl.lot = %s "
+		"GROUP BY wh.warehouse_type "
+		"HAVING SUM(sl.qty_change) > 0 "
+		"ORDER BY wh.warehouse_type ASC"
+	).format(ledger=LEDGER_DOCTYPE, warehouse=WAREHOUSE_DOCTYPE)
+	rows = frappe.db.sql(query, (lot,), as_dict=True)
+	return [{"warehouse_type": r["warehouse_type"], "qty": float(r["qty"] or 0)} for r in rows]
+
+
+def get_warehouse_balances(warehouse: str) -> list[dict]:
+	"""Snapshot tồn của 1 kho (mockup '📊 Kiểm kê') — mọi (item × lot) còn tồn >0.
+
+	1 query gộp GROUP BY (KHÔNG N+1): SUM(qty_change) theo (item,lot), HAVING SUM>0; gom sẵn
+	item_name (AntMed Item) + lot_no/expiry_date (AntMed Lot) qua LEFT JOIN. ORDER item_name,
+	expiry ASC. Trả list dict {item, item_name, lot, lot_no, expiry_date, system_qty}. warehouse
+	rỗng → []. SQL param-bind %s; tên bảng = hằng .format (KHÔNG f-string SQL — giữ guard grep).
+	"""
+	if not warehouse:
+		return []
+	query = (
+		"SELECT sl.item AS item, it.item_name AS item_name, sl.lot AS lot, lot.lot_no AS lot_no, "
+		"lot.expiry_date AS expiry_date, COALESCE(SUM(sl.qty_change), 0) AS system_qty "
+		"FROM `tab{ledger}` sl "
+		"LEFT JOIN `tab{item}` it ON it.name = sl.item "
+		"LEFT JOIN `tab{lot}` lot ON lot.name = sl.lot "
+		"WHERE sl.warehouse = %s "
+		"GROUP BY sl.item, it.item_name, sl.lot, lot.lot_no, lot.expiry_date "
+		"HAVING SUM(sl.qty_change) > 0 "
+		"ORDER BY it.item_name ASC, (lot.expiry_date IS NULL), lot.expiry_date ASC"
+	).format(ledger=LEDGER_DOCTYPE, item=ITEM_DOCTYPE, lot=LOT_DOCTYPE)
+	rows = frappe.db.sql(query, (warehouse,), as_dict=True)
+	return [
+		{
+			"item": r["item"],
+			"item_name": r["item_name"],
+			"lot": r["lot"],
+			"lot_no": r["lot_no"],
+			"expiry_date": r["expiry_date"],
+			"system_qty": float(r["system_qty"] or 0),
+		}
+		for r in rows
+	]
+
+
 def _assert_available(warehouse: str, item: str, lot: str | None, qty: float) -> None:
 	"""Tồn không âm (m03 §4): xuất quá tồn lô khả dụng → throw."""
 	bal = get_balance(warehouse, item, lot)
@@ -236,8 +357,8 @@ def _assert_available(warehouse: str, item: str, lot: str | None, qty: float) ->
 		)
 
 
-def _post_ledger(warehouse, item, lot, qty_change, stock_entry, posting_datetime):
-	"""Ghi 1 dòng sổ tồn + balance_qty chạy sau biến động."""
+def _insert_ledger(warehouse, item, lot, qty_change, posting_datetime, voucher_type, voucher_no, stock_entry=None):
+	"""Ghi 1 dòng sổ tồn (append-only) + balance_qty chạy sau biến động. voucher_* phân loại nguồn."""
 	new_balance = get_balance(warehouse, item, lot) + float(qty_change)
 	frappe.get_doc(
 		{
@@ -248,11 +369,54 @@ def _post_ledger(warehouse, item, lot, qty_change, stock_entry, posting_datetime
 			"qty_change": float(qty_change),
 			"balance_qty": new_balance,
 			"stock_entry": stock_entry,
-			"voucher_type": "AntMed Stock Entry",
-			"voucher_no": stock_entry,
+			"voucher_type": voucher_type,
+			"voucher_no": voucher_no,
 			"posting_datetime": posting_datetime,
 		}
 	).insert(ignore_permissions=True)
+
+
+def _post_ledger(warehouse, item, lot, qty_change, stock_entry, posting_datetime):
+	"""Ghi 1 dòng sổ tồn cho phiếu kho (AntMed Stock Entry). voucher_no == stock_entry."""
+	_insert_ledger(
+		warehouse, item, lot, qty_change, posting_datetime,
+		voucher_type="AntMed Stock Entry", voucher_no=stock_entry, stock_entry=stock_entry,
+	)
+
+
+def post_stock_count(doc) -> None:
+	"""on_submit Kiểm kê (AntMed Stock Count): ghi dòng điều chỉnh tồn cho mỗi dòng variance ≠ 0.
+
+	qty_change = variance (counted − system) → sổ tồn về đúng SL thực đếm. Idempotent theo voucher
+	(voucher_type='AntMed Stock Count', voucher_no=doc.name) → submit lại KHÔNG nhân đôi (LL-BE-7).
+	"""
+	if doc.docstatus != 1:
+		return
+	if frappe.db.exists(LEDGER_DOCTYPE, {"voucher_type": "AntMed Stock Count", "voucher_no": doc.name}):
+		return
+	pdt = doc.count_datetime or now_datetime()
+	for line in doc.items:
+		variance = float(line.variance or 0)
+		if not variance:
+			continue
+		_insert_ledger(
+			doc.warehouse, line.item, line.lot, variance, pdt,
+			voucher_type="AntMed Stock Count", voucher_no=doc.name,
+		)
+
+
+def reverse_stock_count(doc) -> None:
+	"""on_cancel Kiểm kê: ghi dòng đảo (qty_change *-1) cho mọi ledger điều chỉnh của phiếu kiểm kê."""
+	pdt = now_datetime()
+	for led in frappe.get_all(
+		LEDGER_DOCTYPE,
+		filters={"voucher_type": "AntMed Stock Count", "voucher_no": doc.name},
+		fields=["warehouse", "item", "lot", "qty_change"],
+	):
+		_insert_ledger(
+			led["warehouse"], led["item"], led.get("lot"), -float(led["qty_change"] or 0), pdt,
+			voucher_type="AntMed Stock Count Reversal", voucher_no=doc.name,
+		)
 
 
 def post_stock_entry(doc) -> None:

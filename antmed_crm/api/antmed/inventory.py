@@ -393,6 +393,20 @@ def get_lot(name: str) -> dict:
 
 	# 3 aggregate từ sổ tồn (toàn kho cho lô) — khớp invariant SL còn = SUM(qty_change).
 	result.update(stock.get_lot_movement(name))
+
+	# CO/CQ → resolve file_url của AntMed Certificate (mockup D3: link tải PDF). null-guard FK orphan.
+	result["co_file_url"] = (
+		frappe.db.get_value("AntMed Certificate", doc.get("co_cert"), "file_url")
+		if doc.get("co_cert")
+		else None
+	)
+	result["cq_file_url"] = (
+		frappe.db.get_value("AntMed Certificate", doc.get("cq_cert"), "file_url")
+		if doc.get("cq_cert")
+		else None
+	)
+	# SL còn TÁCH theo loại kho (mockup D3 "SL còn = kho TT 80 + ký gửi BV 73") — 1 query GROUP BY.
+	result["balance_by_warehouse_type"] = stock.get_lot_balance_by_warehouse_type(name)
 	return result
 
 
@@ -487,7 +501,22 @@ def initiate_recall(lot: str, reason: str, status: str = RECALL_STATUS_RECALLED)
 	# Audit dòng thời gian: ghi rõ mức recall + lý do + user hiện tại (add_comment gắn doc lô).
 	doc.add_comment("Comment", _("Khởi tạo recall: {0} — {1}").format(status, clean_reason))
 
-	return {"name": doc.name, "recall_status": doc.recall_status, "recall_reason": doc.recall_reason}
+	# 'Đã thu hồi' → tự sinh AntMed Recall Notification + thông báo BV/NV ảnh hưởng (idempotent).
+	# 'Theo dõi' (chưa thu hồi hẳn) KHÔNG phát thông báo thu hồi.
+	recall_notification = None
+	affected_hospitals = 0
+	if status == RECALL_STATUS_RECALLED:
+		rn = _create_recall_notification(lot, clean_reason)
+		recall_notification = rn["name"]
+		affected_hospitals = rn["affected_count"]
+
+	return {
+		"name": doc.name,
+		"recall_status": doc.recall_status,
+		"recall_reason": doc.recall_reason,
+		"recall_notification": recall_notification,
+		"affected_hospitals": affected_hospitals,
+	}
 
 
 @frappe.whitelist(methods=["POST"])
@@ -521,6 +550,190 @@ def create_stock_entry(
 	doc.insert()
 	doc.submit()
 	return {"name": doc.name, "entry_type": doc.entry_type, "docstatus": doc.docstatus}
+
+
+# M03-S3 (mockup C2 Wizard "Xuất cho NV" — quét QR + FIFO + chip CO/CQ): khoá cố định 1 dòng quét
+# (Hyrum — FE bind ổn định, KHÔNG đảo/đổi/thêm bớt). reason ∈ {ok, not_found, no_perm}.
+SCAN_LOT_KEYS = (
+	"found",
+	"reason",
+	"item",
+	"item_name",
+	"lot",
+	"lot_no",
+	"expiry_date",
+	"uom",
+	"unit_price",
+	"requires_cocq",
+	"has_co",
+	"has_cq",
+	"cocq_ok",
+	"recall_status",
+	"available_qty",
+	"days_to_expiry",
+	"is_fifo_priority",
+	"suggested_lot",
+)
+
+
+def _empty_scan(reason: str) -> dict:
+	"""Shape quét rỗng ổn định (found=False) — FE bind cùng khoá kể cả not-found/no-perm."""
+	row = {k: None for k in SCAN_LOT_KEYS}
+	row["found"] = False
+	row["reason"] = reason
+	return row
+
+
+@frappe.whitelist(methods=["GET"])
+def fifo_suggest(item: str, warehouse: str, qty: float = 1) -> dict:
+	"""BR-08 — gợi ý lô xuất theo HSD sớm nhất (FIFO) đủ `qty`. Trả RAW dict (KHÔNG envelope).
+
+	Shape (Hyrum): {item, warehouse, requested_qty, fulfillable, shortage,
+	  lots:[{lot, lot_no, expiry_date, available_qty, take_qty}]}.
+	- lots = lô còn tồn của (item×kho) xếp HSD sớm nhất trước (stock.get_fifo_lots); take_qty phân bổ
+	  tham lam từ lô cận date nhất đến khi đủ qty. fulfillable = tổng tồn ≥ qty; shortage = thiếu (≥0).
+	- BR-13 fail-closed: thiếu read-perm AntMed Stock Ledger/Lot → lots:[] (KHÔNG rò, KHÔNG 500).
+	"""
+	from antmed_crm.antmed import stock
+
+	want = float(qty or 0)
+	base = {"item": item, "warehouse": warehouse, "requested_qty": want, "fulfillable": False, "shortage": want, "lots": []}
+	if not frappe.has_permission(LEDGER_DOCTYPE, "read") or not frappe.has_permission(LOT_DOCTYPE, "read"):
+		return base
+
+	lots = stock.get_fifo_lots(item, warehouse)
+	remaining = want
+	out = []
+	for lot in lots:
+		avail = lot["available_qty"]
+		take = min(avail, remaining) if remaining > 0 else 0.0
+		remaining = max(0.0, remaining - take)
+		out.append(
+			{
+				"lot": lot["lot"],
+				"lot_no": lot["lot_no"],
+				"expiry_date": lot["expiry_date"],
+				"available_qty": avail,
+				"take_qty": take,
+			}
+		)
+	base["lots"] = out
+	base["shortage"] = remaining
+	base["fulfillable"] = remaining <= 0 and bool(out)
+	return base
+
+
+@frappe.whitelist(methods=["GET"])
+def check_fifo(item: str, warehouse: str, lot: str) -> dict:
+	"""BR-08 — lô đã chọn có đúng ưu tiên FIFO (HSD sớm nhất) không. Trả RAW dict (KHÔNG envelope).
+
+	Shape (Hyrum): {is_priority, chosen_lot, chosen_expiry, suggested_lot, suggested_expiry}.
+	- suggested_lot = lô còn tồn có HSD sớm nhất của (item×kho). is_priority=True khi lô chọn CHÍNH là
+	  lô đó HOẶC HSD lô chọn ≤ HSD lô gợi ý (xuất lô cận date hơn vẫn hợp FIFO). Không có lô tồn →
+	  is_priority=True (không cảnh báo vô nghĩa). FE warn khi is_priority=False.
+	- BR-13 fail-closed: thiếu read-perm → is_priority=True (không chặn/không rò), suggested None.
+	"""
+	from antmed_crm.antmed import stock
+	from frappe.utils import getdate
+
+	base = {"is_priority": True, "chosen_lot": lot, "chosen_expiry": None, "suggested_lot": None, "suggested_expiry": None}
+	if not frappe.has_permission(LEDGER_DOCTYPE, "read") or not frappe.has_permission(LOT_DOCTYPE, "read"):
+		return base
+
+	lots = stock.get_fifo_lots(item, warehouse)
+	if not lots:
+		return base
+	suggested = lots[0]
+	base["suggested_lot"] = suggested["lot"]
+	base["suggested_expiry"] = suggested["expiry_date"]
+	chosen = next((l for l in lots if l["lot"] == lot), None)
+	base["chosen_expiry"] = chosen["expiry_date"] if chosen else None
+	# Ưu tiên nếu là chính lô gợi ý, hoặc lô chọn có HSD ≤ lô gợi ý (cận date hơn — vẫn FIFO-hợp lệ).
+	if lot == suggested["lot"]:
+		base["is_priority"] = True
+	elif base["chosen_expiry"] and suggested["expiry_date"]:
+		base["is_priority"] = getdate(base["chosen_expiry"]) <= getdate(suggested["expiry_date"])
+	else:
+		base["is_priority"] = False
+	return base
+
+
+@frappe.whitelist(methods=["GET"])
+def scan_lot(code: str, warehouse: str | None = None) -> dict:
+	"""Quét QR/Barcode 1 lô/VTYT (mockup C2 Wizard "Xuất cho NV" — camera). Trả RAW dict (KHÔNG envelope).
+
+	`code` = chuỗi quét (lot_no == AntMed Lot.name, HOẶC item_code == AntMed Item.name). Giải mã:
+	  - Là lô → dùng lô đó. - Là VTYT → gợi ý lô FIFO (HSD sớm nhất còn tồn ở `warehouse`).
+	  - Không khớp → found=False reason='not_found'.
+	Shape ổn định SCAN_LOT_KEYS (Hyrum) — FE bind 1 dòng bảng "Vật tư đã quét" + chip CO/CQ + alert.
+	- cocq_ok (BR-03): vật tư requires_cocq mà lô thiếu co_cert/cq_cert → 0 (FE chặn 'Xuất' — mockup
+	  'thiếu CQ — không thể xuất'). has_co/has_cq = lô có CO/CQ chưa.
+	- available_qty = tồn lô tại `warehouse` (None nếu không truyền kho); is_fifo_priority = check_fifo.
+	- days_to_expiry = (HSD − hôm nay).days (âm = quá hạn). recall_status từ AntMed Lot.
+	- BR-13 fail-closed: thiếu read-perm AntMed Lot → found=False reason='no_perm' (KHÔNG rò, KHÔNG 500).
+	"""
+	from antmed_crm.antmed import stock
+
+	if not frappe.has_permission(LOT_DOCTYPE, "read"):
+		return _empty_scan("no_perm")
+
+	code = (code or "").strip()
+	if not code:
+		return _empty_scan("not_found")
+
+	# Giải mã: ưu tiên lô (== lot_no/name); rồi VTYT (== item_code/name) → gợi ý lô FIFO.
+	lot_name = None
+	item = None
+	if frappe.db.exists(LOT_DOCTYPE, code):
+		lot_name = code
+		item = frappe.db.get_value(LOT_DOCTYPE, code, "item")
+	elif frappe.db.exists(ITEM_DOCTYPE, code):
+		item = code
+		if warehouse:
+			fifo = stock.get_fifo_lots(item, warehouse)
+			if fifo:
+				lot_name = fifo[0]["lot"]
+	if not lot_name:
+		# VTYT khớp nhưng không có lô tồn (hoặc không truyền kho) → vẫn báo not_found dòng quét.
+		return _empty_scan("not_found")
+
+	lot_doc = frappe.get_doc(LOT_DOCTYPE, lot_name)
+	item = item or lot_doc.get("item")
+	item_doc = frappe.get_doc(ITEM_DOCTYPE, item) if item and frappe.db.exists(ITEM_DOCTYPE, item) else None
+
+	requires_cocq = int(item_doc.get("requires_cocq") or 0) if item_doc else 0
+	has_co = bool(lot_doc.get("co_cert"))
+	has_cq = bool(lot_doc.get("cq_cert"))
+	cocq_ok = stock.compute_cocq_ok(requires_cocq, lot_doc.get("co_cert"), lot_doc.get("cq_cert"))
+
+	expiry = lot_doc.get("expiry_date")
+	days_to_expiry = date_diff(expiry, nowdate()) if expiry else None
+
+	available_qty = stock.get_balance(warehouse, item, lot_name) if (warehouse and item) else None
+	is_fifo_priority = None
+	if warehouse and item:
+		is_fifo_priority = check_fifo(item, warehouse, lot_name)["is_priority"]
+
+	return {
+		"found": True,
+		"reason": "ok",
+		"item": item,
+		"item_name": item_doc.get("item_name") if item_doc else None,
+		"lot": lot_name,
+		"lot_no": lot_doc.get("lot_no"),
+		"expiry_date": expiry,
+		"uom": (item_doc.get("uom") if item_doc else None),
+		"unit_price": (item_doc.get("default_unit_price") if item_doc else None),
+		"requires_cocq": requires_cocq,
+		"has_co": has_co,
+		"has_cq": has_cq,
+		"cocq_ok": bool(cocq_ok),
+		"recall_status": lot_doc.get("recall_status"),
+		"available_qty": available_qty,
+		"days_to_expiry": days_to_expiry,
+		"is_fifo_priority": is_fifo_priority,
+		"suggested_lot": None if is_fifo_priority is None else (lot_name if is_fifo_priority else None),
+	}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -994,3 +1207,780 @@ def get_stock_entry(name: str) -> dict:
 		"total_value": total_value,
 		"items": items,
 	}
+
+
+# ── M03 (mockup sidebar "📊 Kiểm kê") — phiếu Kiểm kê tồn 1 kho (AntMed Stock Count) ──
+# snapshot tồn → nhập SL thực đếm → submit ghi điều chỉnh sổ tồn (variance). Constants Hyrum (FE bind).
+STOCK_COUNT_DOCTYPE = "AntMed Stock Count"
+STOCK_COUNT_ITEM_DOCTYPE = "AntMed Stock Count Item"
+
+SNAPSHOT_ROW_KEYS = ("item", "item_name", "lot", "lot_no", "expiry_date", "system_qty")
+STOCK_COUNT_LIST_FIELDS = [
+	"name",
+	"warehouse",
+	"count_datetime",
+	"docstatus",
+	"total_variance_qty",
+	"counted_by",
+	"counted_by.full_name as counted_by_name",
+]
+STOCK_COUNT_LIST_ITEM_KEYS = (
+	"name",
+	"warehouse",
+	"count_datetime",
+	"docstatus",
+	"total_variance_qty",
+	"counted_by",
+	"counted_by_name",
+)
+STOCK_COUNT_DETAIL_HEADER_KEYS = (
+	"name",
+	"warehouse",
+	"warehouse_name",
+	"count_datetime",
+	"counted_by",
+	"counted_by_name",
+	"total_variance_qty",
+	"note",
+	"docstatus",
+)
+STOCK_COUNT_DETAIL_ITEM_KEYS = (
+	"item",
+	"item_name",
+	"lot",
+	"lot_no",
+	"expiry_date",
+	"system_qty",
+	"counted_qty",
+	"variance",
+)
+
+
+@frappe.whitelist(methods=["GET"])
+def stock_count_snapshot(warehouse: str) -> dict:
+	"""Snapshot tồn 1 kho cho phiếu Kiểm kê (mockup '📊 Kiểm kê'). Trả RAW dict (KHÔNG envelope).
+
+	Shape: {warehouse, rows:[{item, item_name, lot, lot_no, expiry_date, system_qty}]}.
+	- rows = mọi (item × lot) còn tồn >0 ở kho (stock.get_warehouse_balances — 1 query gộp, KHÔNG N+1).
+	- BR-13 fail-closed: thiếu read-perm AntMed Stock Ledger/Warehouse → rows:[] (KHÔNG rò, KHÔNG 500).
+	"""
+	from antmed_crm.antmed import stock
+
+	if not frappe.has_permission(LEDGER_DOCTYPE, "read") or not frappe.has_permission(WAREHOUSE_DOCTYPE, "read"):
+		return {"warehouse": warehouse, "rows": []}
+	return {"warehouse": warehouse, "rows": stock.get_warehouse_balances(warehouse)}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_stock_count(warehouse: str, items: str | list | None = None, note: str | None = None) -> dict:
+	"""Tạo + submit phiếu Kiểm kê → ghi điều chỉnh sổ tồn (variance) đưa tồn về SL thực đếm.
+
+	`items` = list dict (hoặc JSON-string từ FE): [{item, lot?, counted_qty}]. system_qty/variance do
+	controller TỰ TÍNH (authoritative tại submit). DocPerm áp tự nhiên. Trả {name, docstatus,
+	total_variance_qty}.
+	"""
+	item_rows = json.loads(items) if isinstance(items, str) else (items or [])
+	doc = frappe.get_doc(
+		{"doctype": STOCK_COUNT_DOCTYPE, "warehouse": warehouse, "note": note, "items": item_rows}
+	)
+	doc.insert()
+	doc.submit()
+	return {"name": doc.name, "docstatus": doc.docstatus, "total_variance_qty": doc.total_variance_qty}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_stock_counts(
+	warehouse: str | None = None,
+	filters: dict | str | None = None,
+	start: int = 0,
+	page_length: int = 20,
+) -> dict:
+	"""Danh sách phiếu Kiểm kê (lịch sử). Trả RAW {data, total_count} — count==rows dưới DocPerm.
+
+	Mỗi item: name, warehouse, count_datetime, docstatus, total_variance_qty, counted_by,
+	  counted_by_name (User.full_name dotted-fetch). filter warehouse lọc nhanh theo kho.
+	- BR-13 fail-closed: user noperm AntMed Stock Count → {data:[], total_count:0} (KHÔNG rò).
+	"""
+	conditions = _coerce_filters(filters)
+	if warehouse:
+		conditions.append(["warehouse", "=", warehouse])
+
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+
+	try:
+		rows = frappe.get_list(
+			STOCK_COUNT_DOCTYPE,
+			filters=conditions,
+			fields=STOCK_COUNT_LIST_FIELDS,
+			limit_start=start,
+			limit_page_length=page_length or 0,
+			order_by=f"`tab{STOCK_COUNT_DOCTYPE}`.count_datetime desc",
+		)
+	except frappe.PermissionError:
+		return {"data": [], "total_count": 0}
+
+	data = [{k: r.get(k) for k in STOCK_COUNT_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(STOCK_COUNT_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+def _empty_stock_count_detail(name: str) -> dict:
+	"""Shape rỗng ổn định (BR-13 fail-closed) — KHÔNG rò header thật, items rỗng."""
+	header = {k: None for k in STOCK_COUNT_DETAIL_HEADER_KEYS}
+	header["name"] = name
+	header["items"] = []
+	return header
+
+
+@frappe.whitelist(methods=["GET"])
+def get_stock_count(name: str) -> dict:
+	"""Chi tiết 1 phiếu Kiểm kê (drill-down từ list). Trả RAW dict (KHÔNG envelope).
+
+	Shape (Hyrum): header STOCK_COUNT_DETAIL_HEADER_KEYS + items[STOCK_COUNT_DETAIL_ITEM_KEYS].
+	- item_name (AntMed Item) + lot_no/expiry_date (AntMed Lot) resolve BATCH (KHÔNG N+1).
+	- warehouse_name + counted_by_name dotted-fetch null-guard. Phiếu không tồn tại → DoesNotExistError.
+	- BR-13 fail-closed: user noperm → shape rỗng ổn định (KHÔNG rò header, KHÔNG 500).
+	"""
+	if not frappe.has_permission(STOCK_COUNT_DOCTYPE, "read", doc=name):
+		return _empty_stock_count_detail(name)
+
+	doc = frappe.get_doc(STOCK_COUNT_DOCTYPE, name)
+
+	warehouse = doc.get("warehouse")
+	warehouse_name = (
+		frappe.db.get_value(WAREHOUSE_DOCTYPE, warehouse, "warehouse_name") if warehouse else None
+	)
+	counted_by = doc.get("counted_by")
+	counted_by_name = frappe.db.get_value("User", counted_by, "full_name") if counted_by else None
+
+	child_rows = doc.get("items") or []
+	item_codes = {r.item for r in child_rows if r.get("item")}
+	lot_codes = {r.lot for r in child_rows if r.get("lot")}
+	item_map: dict = {}
+	if item_codes:
+		for it in frappe.get_all(
+			ITEM_DOCTYPE, filters={"name": ("in", list(item_codes))}, fields=["name", "item_name"]
+		):
+			item_map[it["name"]] = it
+	lot_map: dict = {}
+	if lot_codes:
+		for lt in frappe.get_all(
+			LOT_DOCTYPE, filters={"name": ("in", list(lot_codes))}, fields=["name", "lot_no", "expiry_date"]
+		):
+			lot_map[lt["name"]] = lt
+
+	items = []
+	for r in child_rows:
+		lot_doc = lot_map.get(r.get("lot")) or {}
+		item_doc = item_map.get(r.get("item")) or {}
+		items.append(
+			{
+				"item": r.get("item"),
+				"item_name": item_doc.get("item_name"),
+				"lot": r.get("lot"),
+				"lot_no": lot_doc.get("lot_no"),
+				"expiry_date": lot_doc.get("expiry_date"),
+				"system_qty": r.get("system_qty"),
+				"counted_qty": r.get("counted_qty"),
+				"variance": r.get("variance"),
+			}
+		)
+
+	return {
+		"name": doc.name,
+		"warehouse": warehouse,
+		"warehouse_name": warehouse_name,
+		"count_datetime": doc.get("count_datetime"),
+		"counted_by": counted_by,
+		"counted_by_name": counted_by_name,
+		"total_variance_qty": doc.get("total_variance_qty"),
+		"note": doc.get("note"),
+		"docstatus": doc.docstatus,
+		"items": items,
+	}
+
+
+# ── M03 (mockup sidebar "⚠ Cảnh báo HSD") — scheduler hằng ngày notify lô cận/quá HSD ──
+# KHÔNG @frappe.whitelist (chỉ scheduler/test gọi — tránh endpoint spam Notification). Wire ở
+# hooks.py::scheduler_events.daily. Idempotent theo ngày (1 thông báo/user/ngày, dedup theo subject).
+def notify_expiry_alerts(within_days: int = 90) -> dict:
+	"""Quét lô cận/quá HSD ≤ within_days (toàn kho) → tạo Notification Log cho Thủ kho/Quản lý.
+
+	Trả {expired, d30, d60, d90, total_lots, notified}. Không có lô cận date → notified=0 (không spam).
+	Recipient = user enabled mang role 'Thủ kho'/'Quản lý' (trừ Administrator/Guest). Idempotent theo
+	ngày: subject gắn ngày hôm nay → đã có Notification Log cùng subject cho user thì bỏ qua.
+	"""
+	from antmed_crm.antmed import stock
+
+	balances = stock.get_expiring_balances(int(within_days))
+	summary = {"expired": 0, "d30": 0, "d60": 0, "d90": 0, "total_lots": 0}
+	ref = nowdate()
+	for b in balances:
+		expiry = b.get("expiry_date")
+		if not expiry:
+			continue
+		summary[_expiry_severity(date_diff(expiry, ref))] += 1
+		summary["total_lots"] += 1
+	if not summary["total_lots"]:
+		return {**summary, "notified": 0}
+
+	user_ids = frappe.get_all(
+		"Has Role",
+		filters={"role": ["in", ["Thủ kho", "Quản lý"]], "parenttype": "User"},
+		pluck="parent",
+		distinct=True,
+	)
+	users = (
+		frappe.get_all(
+			"User",
+			filters=[["name", "in", user_ids], ["enabled", "=", 1], ["name", "not in", ["Administrator", "Guest"]]],
+			pluck="name",
+		)
+		if user_ids
+		else []
+	)
+	subject = _("Cảnh báo HSD {0}: {1} lô cận/quá hạn ({2} đã quá hạn)").format(
+		ref, summary["total_lots"], summary["expired"]
+	)
+	content = _(
+		"Tồn kho có {0} lô cần xử lý HSD: {1} đã quá hạn, {2} ≤30 ngày, {3} ≤60 ngày, {4} ≤90 ngày. "
+		"Mở '⚠ Cảnh báo HSD' để xem chi tiết."
+	).format(summary["total_lots"], summary["expired"], summary["d30"], summary["d60"], summary["d90"])
+	notified = 0
+	for user in users:
+		if frappe.db.exists("Notification Log", {"for_user": user, "subject": subject}):
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "Notification Log",
+				"for_user": user,
+				"type": "Alert",
+				"subject": subject,
+				"email_content": content,
+			}
+		).insert(ignore_permissions=True)
+		notified += 1
+	return {**summary, "notified": notified}
+
+
+# ── M03 D3 (cây phả hệ truy vết lot) — lô → giao phòng mổ (M04) → hóa đơn (E-Invoice) ──
+# Nối lô tới ca mổ/bác sỹ/BV/SL dùng qua AntMed Delivery Item.lot (KHÔNG qua ledger — handover
+# chưa chắc ghi ledger). Hyrum: khoá cố định mỗi nhánh giao (FE bind ổn định).
+DELIVERY_DOCTYPE = "AntMed Delivery"
+DELIVERY_ITEM_DOCTYPE = "AntMed Delivery Item"
+EINVOICE_DOCTYPE = "AntMed E-Invoice"
+DOCTOR_DOCTYPE = "AntMed Doctor"
+GENEALOGY_DELIVERY_KEYS = (
+	"delivery",
+	"status",
+	"hospital",
+	"hospital_name",
+	"doctor",
+	"doctor_name",
+	"surgery_datetime",
+	"surgery_room",
+	"used_qty",
+	"einvoice",
+	"einvoice_status",
+	"einvoice_pdf",
+)
+
+
+@frappe.whitelist(methods=["GET"])
+def lot_genealogy(lot: str) -> dict:
+	"""Cây phả hệ tiêu thụ 1 lô tại ca mổ (mockup D3): lô → AntMed Delivery (BV/bác sỹ/ca mổ/SL dùng)
+	→ Hóa đơn (AntMed E-Invoice). Trả RAW dict (KHÔNG envelope).
+
+	Shape (Hyrum): {lot, item, item_name, deliveries:[{delivery, status, hospital, hospital_name,
+	  doctor, doctor_name, surgery_datetime, surgery_room, used_qty, einvoice, einvoice_status,
+	  einvoice_pdf}]}.
+	- deliveries = các phiếu giao có dòng (Delivery Item) gắn LÔ này; used_qty = consumed||delivered||
+	  requested của lô trong phiếu. Sort surgery_datetime tăng (ca sớm trước; None cuối).
+	- Parent Delivery đọc DƯỚI quyền (frappe.get_list áp User Permission hospital → BR-13 fail-closed:
+	  phiếu ngoài tuyến NV KHÔNG lọt). einvoice = AntMed E-Invoice.delivery == phiếu (1 hóa đơn/phiếu).
+	- Fail-closed: thiếu read-perm AntMed Lot → PermissionError; thiếu read-perm AntMed Delivery →
+	  deliveries:[] (KHÔNG rò). Lô không có phiếu giao nào → deliveries:[].
+	"""
+	if not frappe.has_permission(LOT_DOCTYPE, "read", doc=lot):
+		frappe.throw(_("Bạn không có quyền xem lô này."), frappe.PermissionError)
+
+	item = frappe.db.get_value(LOT_DOCTYPE, lot, "item")
+	item_name = frappe.db.get_value(ITEM_DOCTYPE, item, "item_name") if item else None
+	base = {"lot": lot, "item": item, "item_name": item_name, "deliveries": []}
+
+	if not frappe.has_permission(DELIVERY_DOCTYPE, "read"):
+		return base
+
+	# Dòng giao gắn lô (child get_all — lọc parent dưới quyền ở bước sau, fail-closed).
+	child = frappe.get_all(
+		DELIVERY_ITEM_DOCTYPE,
+		filters={"lot": lot, "parenttype": DELIVERY_DOCTYPE},
+		fields=["parent", "consumed_qty", "delivered_qty", "requested_qty"],
+	)
+	if not child:
+		return base
+	parent_names = list({c["parent"] for c in child if c.get("parent")})
+
+	# used_qty của lô theo từng phiếu (consumed → delivered → requested).
+	used_by_del: dict = {}
+	for c in child:
+		q = float(c.get("consumed_qty") or c.get("delivered_qty") or c.get("requested_qty") or 0)
+		used_by_del[c["parent"]] = used_by_del.get(c["parent"], 0.0) + q
+
+	# Parent phiếu giao DƯỚI quyền (User Permission hospital → NV ngoài tuyến KHÔNG thấy).
+	try:
+		dels = frappe.get_list(
+			DELIVERY_DOCTYPE,
+			filters={"name": ["in", parent_names]},
+			fields=["name", "status", "hospital", "doctor", "surgery_datetime", "surgery_room"],
+			limit_page_length=0,
+		)
+	except frappe.PermissionError:
+		return base
+	if not dels:
+		return base
+
+	# Batch resolve hospital_name + doctor_name (KHÔNG N+1).
+	hosp_ids = list({d["hospital"] for d in dels if d.get("hospital")})
+	doc_ids = list({d["doctor"] for d in dels if d.get("doctor")})
+	hosp_map = (
+		{r["name"]: r.get("hospital_name") for r in frappe.get_all(HOSPITAL_DOCTYPE, {"name": ["in", hosp_ids]}, ["name", "hospital_name"])}
+		if hosp_ids
+		else {}
+	)
+	doc_map = (
+		{r["name"]: r.get("full_name") for r in frappe.get_all(DOCTOR_DOCTYPE, {"name": ["in", doc_ids]}, ["name", "full_name"])}
+		if doc_ids
+		else {}
+	)
+
+	# E-Invoice theo phiếu (batch; 1 hóa đơn/phiếu — lấy đầu).
+	del_names = [d["name"] for d in dels]
+	einv_map: dict = {}
+	for e in frappe.get_all(EINVOICE_DOCTYPE, {"delivery": ["in", del_names]}, ["name", "delivery", "status", "pdf_file"]):
+		einv_map.setdefault(e["delivery"], e)
+
+	deliveries = []
+	for d in dels:
+		einv = einv_map.get(d["name"]) or {}
+		deliveries.append(
+			{
+				"delivery": d["name"],
+				"status": d.get("status"),
+				"hospital": d.get("hospital"),
+				"hospital_name": hosp_map.get(d.get("hospital")),
+				"doctor": d.get("doctor"),
+				"doctor_name": doc_map.get(d.get("doctor")),
+				"surgery_datetime": d.get("surgery_datetime"),
+				"surgery_room": d.get("surgery_room"),
+				"used_qty": used_by_del.get(d["name"]),
+				"einvoice": einv.get("name"),
+				"einvoice_status": einv.get("status"),
+				"einvoice_pdf": einv.get("pdf_file"),
+			}
+		)
+	deliveries.sort(key=lambda x: (x["surgery_datetime"] is None, str(x["surgery_datetime"] or "")))
+	base["deliveries"] = deliveries
+	return base
+
+
+# ── M03 D3 (lưu vết truy vết lô — audit/recall) — AntMed Lot Trace Request ──
+LTR_DOCTYPE = "AntMed Lot Trace Request"
+LTR_LIST_FIELDS = [
+	"name",
+	"lot",
+	"lot_no",
+	"requested_by",
+	"requested_by.full_name as requested_by_name",
+	"generated_at",
+	"affected_hospitals",
+]
+LTR_LIST_ITEM_KEYS = (
+	"name",
+	"lot",
+	"lot_no",
+	"requested_by",
+	"requested_by_name",
+	"generated_at",
+	"affected_hospitals",
+)
+
+
+@frappe.whitelist(methods=["POST"])
+def save_lot_trace(lot: str, note: str | None = None) -> dict:
+	"""Lưu 1 bản truy vết lô (snapshot get_lot + lot_trace + lot_genealogy) cho audit/recall.
+
+	Trả {name, generated_at, affected_hospitals}. affected_hospitals = số BV distinct trong phả hệ.
+	graph_json = JSON snapshot (lot_info + events + deliveries) — đóng băng tại thời điểm truy vết.
+	Fail-closed: thiếu read-perm AntMed Lot → PermissionError.
+	"""
+	if not frappe.has_permission(LOT_DOCTYPE, "read", doc=lot):
+		frappe.throw(_("Bạn không có quyền xem lô này."), frappe.PermissionError)
+
+	info = get_lot(lot)
+	trace = lot_trace(lot)
+	gen = lot_genealogy(lot)
+	affected = len({d["hospital"] for d in gen.get("deliveries", []) if d.get("hospital")})
+	snapshot = {
+		"lot_info": info,
+		"events": trace.get("events", []),
+		"deliveries": gen.get("deliveries", []),
+		"generated_at": str(frappe.utils.now_datetime()),
+	}
+	doc = frappe.get_doc(
+		{
+			"doctype": LTR_DOCTYPE,
+			"lot": lot,
+			"lot_no": info.get("lot_no"),
+			"requested_by": frappe.session.user,
+			"generated_at": frappe.utils.now_datetime(),
+			"affected_hospitals": affected,
+			"note": note,
+			"graph_json": frappe.as_json(snapshot),
+		}
+	)
+	doc.insert()
+	return {"name": doc.name, "generated_at": str(doc.generated_at), "affected_hospitals": affected}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_lot_traces(
+	lot: str | None = None,
+	filters: dict | str | None = None,
+	start: int = 0,
+	page_length: int = 20,
+) -> dict:
+	"""Danh sách bản truy vết đã lưu. Trả RAW {data, total_count} — count==rows dưới DocPerm.
+
+	Mỗi item: name, lot, lot_no, requested_by, requested_by_name (User.full_name), generated_at,
+	affected_hospitals. filter lot lọc nhanh theo lô. Fail-closed: noperm → {data:[], total_count:0}.
+	"""
+	conditions = _coerce_filters(filters)
+	if lot:
+		conditions.append(["lot", "=", lot])
+
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+
+	try:
+		rows = frappe.get_list(
+			LTR_DOCTYPE,
+			filters=conditions,
+			fields=LTR_LIST_FIELDS,
+			limit_start=start,
+			limit_page_length=page_length or 0,
+			order_by=f"`tab{LTR_DOCTYPE}`.generated_at desc",
+		)
+	except frappe.PermissionError:
+		return {"data": [], "total_count": 0}
+
+	data = [{k: r.get(k) for k in LTR_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(LTR_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_lot_trace_request(name: str) -> dict:
+	"""Chi tiết 1 bản truy vết đã lưu (header + graph parse). Trả RAW dict (KHÔNG envelope).
+
+	graph = parse graph_json (lot_info + events + deliveries snapshot). Phiếu không tồn tại →
+	DoesNotExistError. Fail-closed: noperm → PermissionError.
+	"""
+	if not frappe.has_permission(LTR_DOCTYPE, "read", doc=name):
+		frappe.throw(_("Bạn không có quyền xem bản truy vết này."), frappe.PermissionError)
+	doc = frappe.get_doc(LTR_DOCTYPE, name)
+	graph = frappe.parse_json(doc.graph_json) if doc.graph_json else {}
+	return {
+		"name": doc.name,
+		"lot": doc.lot,
+		"lot_no": doc.lot_no,
+		"requested_by": doc.requested_by,
+		"requested_by_name": (
+			frappe.db.get_value("User", doc.requested_by, "full_name") if doc.requested_by else None
+		),
+		"generated_at": doc.generated_at,
+		"affected_hospitals": doc.affected_hospitals,
+		"note": doc.note,
+		"graph": graph,
+	}
+
+
+# ── M03 D3 (recall → tự sinh thông báo thu hồi + BV ảnh hưởng) — AntMed Recall Notification ──
+RN_DOCTYPE = "AntMed Recall Notification"
+RN_LIST_FIELDS = [
+	"name",
+	"lot",
+	"lot_no",
+	"item",
+	"status",
+	"initiated_at",
+	"affected_count",
+	"notified_count",
+]
+RN_LIST_ITEM_KEYS = (
+	"name",
+	"lot",
+	"lot_no",
+	"item",
+	"status",
+	"initiated_at",
+	"affected_count",
+	"notified_count",
+)
+RN_AFFECTED_KEYS = ("hospital", "hospital_name", "qty_consignment", "qty_delivered")
+
+
+def _recall_affected_hospitals(lot: str) -> list[dict]:
+	"""BV ảnh hưởng bởi recall 1 lô = BV còn ký gửi lô + BV đã được giao/dùng lô (gộp).
+
+	Trả list dict {hospital, hospital_name, qty_consignment, qty_delivered}. Đọc raw (recall là hành
+	động admin — phải thấy MỌI BV ảnh hưởng, không giới hạn data-scope người bấm).
+	"""
+	from antmed_crm.antmed import stock
+
+	by_hosp: dict = {}
+	# 1) Còn ký gửi tại BV (lô vẫn nằm vật lý ở kho ký gửi).
+	for c in stock.get_lot_consignment_by_hospital(lot):
+		h = c["hospital"]
+		by_hosp.setdefault(h, {"qty_consignment": 0.0, "qty_delivered": 0.0})
+		by_hosp[h]["qty_consignment"] += c["qty"]
+	# 2) Đã giao/dùng ở ca mổ (Delivery Item.lot → Delivery.hospital).
+	child = frappe.get_all(
+		DELIVERY_ITEM_DOCTYPE,
+		filters={"lot": lot, "parenttype": DELIVERY_DOCTYPE},
+		fields=["parent", "consumed_qty", "delivered_qty", "requested_qty"],
+	)
+	if child:
+		parents = list({c["parent"] for c in child if c.get("parent")})
+		del_hosp = {
+			d["name"]: d.get("hospital")
+			for d in frappe.get_all(DELIVERY_DOCTYPE, {"name": ["in", parents]}, ["name", "hospital"])
+		}
+		for c in child:
+			h = del_hosp.get(c["parent"])
+			if not h:
+				continue
+			q = float(c.get("consumed_qty") or c.get("delivered_qty") or c.get("requested_qty") or 0)
+			by_hosp.setdefault(h, {"qty_consignment": 0.0, "qty_delivered": 0.0})
+			by_hosp[h]["qty_delivered"] += q
+
+	name_map = {}
+	if by_hosp:
+		for r in frappe.get_all(HOSPITAL_DOCTYPE, {"name": ["in", list(by_hosp.keys())]}, ["name", "hospital_name"]):
+			name_map[r["name"]] = r.get("hospital_name")
+	return [
+		{
+			"hospital": h,
+			"hospital_name": name_map.get(h),
+			"qty_consignment": v["qty_consignment"],
+			"qty_delivered": v["qty_delivered"],
+		}
+		for h, v in sorted(by_hosp.items())
+	]
+
+
+def _notify_recall(lot_label: str, item: str | None, affected: list) -> int:
+	"""Tạo Notification Log cảnh báo thu hồi cho Quản lý/Thủ kho + NV phụ trách BV ảnh hưởng.
+
+	Recipient = user enabled mang role Quản lý/Thủ kho ∪ user có User Permission (allow=AntMed Hospital)
+	tới BV ảnh hưởng (NV phụ trách tuyến). Trả số người đã báo.
+	"""
+	hosp_names = [a["hospital"] for a in affected]
+	recipients = set(
+		frappe.get_all("Has Role", {"role": ["in", ["Quản lý", "Thủ kho"]], "parenttype": "User"}, pluck="parent", distinct=True)
+	)
+	if hosp_names:
+		for u in frappe.get_all(
+			"User Permission", {"allow": HOSPITAL_DOCTYPE, "for_value": ["in", hosp_names]}, pluck="user", distinct=True
+		):
+			recipients.add(u)
+	recipients.discard("Administrator")
+	recipients.discard("Guest")
+	if not recipients:
+		return 0
+	recipients = set(frappe.get_all("User", {"name": ["in", list(recipients)], "enabled": 1}, pluck="name"))
+
+	subject = _("Thu hồi lô {0}: {1} BV ảnh hưởng").format(lot_label, len(affected))
+	content = _(
+		"Lô {0} ({1}) đã bị thu hồi. {2} bệnh viện đang giữ/đã dùng lô — kiểm tra & xử lý ngay."
+	).format(lot_label, item or "", len(affected))
+	notified = 0
+	for u in recipients:
+		frappe.get_doc(
+			{"doctype": "Notification Log", "for_user": u, "type": "Alert", "subject": subject, "email_content": content}
+		).insert(ignore_permissions=True)
+		notified += 1
+	return notified
+
+
+def _create_recall_notification(lot: str, reason: str) -> dict:
+	"""Tạo AntMed Recall Notification cho lô (idempotent theo bản đang mở) + thông báo. Trả {name, affected_count}."""
+	existing = frappe.db.get_value(RN_DOCTYPE, {"lot": lot, "status": ["!=", "Đóng"]}, "name")
+	if existing:
+		return {"name": existing, "affected_count": frappe.db.get_value(RN_DOCTYPE, existing, "affected_count") or 0}
+
+	lot_no = frappe.db.get_value(LOT_DOCTYPE, lot, "lot_no")
+	item = frappe.db.get_value(LOT_DOCTYPE, lot, "item")
+	affected = _recall_affected_hospitals(lot)
+	notified = _notify_recall(lot_no or lot, item, affected)
+	doc = frappe.get_doc(
+		{
+			"doctype": RN_DOCTYPE,
+			"lot": lot,
+			"lot_no": lot_no,
+			"item": item,
+			"reason": reason,
+			"status": "Đã phát",
+			"initiated_by": frappe.session.user,
+			"initiated_at": frappe.utils.now_datetime(),
+			"affected_count": len(affected),
+			"notified_count": notified,
+			"hospitals": [{k: a[k] for k in RN_AFFECTED_KEYS} for a in affected],
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return {"name": doc.name, "affected_count": len(affected)}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_recall_notifications(
+	lot: str | None = None,
+	filters: dict | str | None = None,
+	start: int = 0,
+	page_length: int = 20,
+) -> dict:
+	"""Danh sách thông báo thu hồi. Trả RAW {data, total_count} — count==rows dưới DocPerm.
+
+	Mỗi item: name, lot, lot_no, item, status, initiated_at, affected_count, notified_count.
+	Fail-closed: noperm → {data:[], total_count:0}.
+	"""
+	conditions = _coerce_filters(filters)
+	if lot:
+		conditions.append(["lot", "=", lot])
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	try:
+		rows = frappe.get_list(
+			RN_DOCTYPE,
+			filters=conditions,
+			fields=RN_LIST_FIELDS,
+			limit_start=start,
+			limit_page_length=page_length or 0,
+			order_by=f"`tab{RN_DOCTYPE}`.initiated_at desc",
+		)
+	except frappe.PermissionError:
+		return {"data": [], "total_count": 0}
+	data = [{k: r.get(k) for k in RN_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(RN_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_recall_notification(name: str) -> dict:
+	"""Chi tiết 1 thông báo thu hồi (header + BV ảnh hưởng). Trả RAW dict (KHÔNG envelope).
+
+	Phiếu không tồn tại → DoesNotExistError. Fail-closed: noperm → PermissionError.
+	"""
+	if not frappe.has_permission(RN_DOCTYPE, "read", doc=name):
+		frappe.throw(_("Bạn không có quyền xem thông báo thu hồi này."), frappe.PermissionError)
+	doc = frappe.get_doc(RN_DOCTYPE, name)
+	return {
+		"name": doc.name,
+		"lot": doc.lot,
+		"lot_no": doc.lot_no,
+		"item": doc.item,
+		"status": doc.status,
+		"reason": doc.reason,
+		"initiated_by": doc.initiated_by,
+		"initiated_at": doc.initiated_at,
+		"affected_count": doc.affected_count,
+		"notified_count": doc.notified_count,
+		"hospitals": [{k: h.get(k) for k in RN_AFFECTED_KEYS} for h in (doc.get("hospitals") or [])],
+	}
+
+
+# ── M03 D3 (export PDF bản truy vết lô) ──
+def _esc(value) -> str:
+	"""Escape HTML tối thiểu cho nội dung render PDF (chống vỡ markup)."""
+	return frappe.utils.escape_html(str(value)) if value is not None else ""
+
+
+def _render_lot_trace_html(doc, graph: dict) -> str:
+	"""Dựng HTML 1 trang cho PDF truy vết: thông tin lô + dòng thời gian + phả hệ ca mổ."""
+	info = (graph.get("lot_info") or {}) if isinstance(graph, dict) else {}
+	events = graph.get("events") or []
+	deliveries = graph.get("deliveries") or []
+
+	info_rows = "".join(
+		f"<tr><td class='k'>{_esc(k)}</td><td>{_esc(v)}</td></tr>"
+		for k, v in (
+			("SKU", info.get("item_name") or info.get("item")),
+			("NCC", info.get("supplier_name") or info.get("supplier")),
+			("NSX", info.get("mfg_date")),
+			("HSD", info.get("expiry_date")),
+			("SL nhập", info.get("qty_in")),
+			("SL đã xuất", info.get("qty_out")),
+			("SL còn", info.get("qty_remaining")),
+			("Trạng thái thu hồi", info.get("recall_status")),
+		)
+	)
+	ev_rows = "".join(
+		f"<tr><td>{_esc(e.get('posting_datetime'))}</td><td>{_esc(e.get('entry_type'))}</td>"
+		f"<td>{_esc(e.get('direction'))}</td><td>{_esc(e.get('warehouse_name') or e.get('warehouse'))}</td>"
+		f"<td>{_esc(e.get('qty'))}</td></tr>"
+		for e in events
+	) or "<tr><td colspan='5'>Không có dòng thời gian</td></tr>"
+	del_rows = "".join(
+		f"<tr><td>{_esc(d.get('hospital_name') or d.get('hospital'))}</td><td>{_esc(d.get('doctor_name') or d.get('doctor'))}</td>"
+		f"<td>{_esc(d.get('surgery_datetime'))}</td><td>{_esc(d.get('used_qty'))}</td><td>{_esc(d.get('einvoice') or '—')}</td></tr>"
+		for d in deliveries
+	) or "<tr><td colspan='5'>Chưa có ca mổ dùng lô này</td></tr>"
+
+	return f"""<html><head><meta charset='utf-8'><style>
+	body{{font-family:Arial,sans-serif;font-size:12px;color:#1a1a1a;padding:18px}}
+	h1{{font-size:18px;margin:0 0 2px}} h2{{font-size:13px;margin:16px 0 6px;border-bottom:1px solid #ccc;padding-bottom:3px}}
+	.sub{{color:#666;font-size:11px;margin-bottom:8px}}
+	table{{width:100%;border-collapse:collapse;margin-bottom:6px}}
+	th,td{{border:1px solid #ddd;padding:5px 7px;text-align:left}} th{{background:#f3f4f6}}
+	td.k{{width:160px;color:#555;background:#fafafa}}
+	</style></head><body>
+	<h1>Truy vết lô {_esc(doc.lot_no or doc.lot)}</h1>
+	<div class='sub'>Mã bản: {_esc(doc.name)} · Người truy vết: {_esc(doc.requested_by)} · Lúc: {_esc(doc.generated_at)} · BV ảnh hưởng: {_esc(doc.affected_hospitals)}</div>
+	<h2>Thông tin lô</h2><table>{info_rows}</table>
+	<h2>Dòng thời gian (nhập/xuất/chuyển)</h2>
+	<table><tr><th>Thời điểm</th><th>Loại</th><th>Chiều</th><th>Kho</th><th>SL</th></tr>{ev_rows}</table>
+	<h2>Sử dụng tại ca mổ</h2>
+	<table><tr><th>Bệnh viện</th><th>Bác sỹ</th><th>Ca mổ</th><th>SL dùng</th><th>Hóa đơn</th></tr>{del_rows}</table>
+	</body></html>"""
+
+
+@frappe.whitelist(methods=["POST"])
+def export_lot_trace_pdf(name: str) -> dict:
+	"""Sinh PDF cho 1 bản truy vết đã lưu (AntMed Lot Trace Request) → đính kèm + trả file_url.
+
+	Render graph_json (thông tin lô + dòng thời gian + phả hệ ca mổ) → PDF (wkhtmltopdf) → File private
+	đính vào exported_pdf. Fail-closed: noperm → PermissionError; phiếu không tồn tại → DoesNotExistError.
+	"""
+	if not frappe.has_permission(LTR_DOCTYPE, "read", doc=name):
+		frappe.throw(_("Bạn không có quyền xuất bản truy vết này."), frappe.PermissionError)
+
+	from frappe.utils.pdf import get_pdf
+
+	doc = frappe.get_doc(LTR_DOCTYPE, name)
+	graph = frappe.parse_json(doc.graph_json) if doc.graph_json else {}
+	pdf_bytes = get_pdf(_render_lot_trace_html(doc, graph))
+	file_name = f"truy-vet-{doc.lot_no or doc.lot}-{doc.name}.pdf"
+	file_doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": file_name,
+			"attached_to_doctype": LTR_DOCTYPE,
+			"attached_to_name": doc.name,
+			"attached_to_field": "exported_pdf",
+			"content": pdf_bytes,
+			"is_private": 1,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.set_value(LTR_DOCTYPE, doc.name, "exported_pdf", file_doc.file_url)
+	return {"name": doc.name, "exported_pdf": file_doc.file_url, "file_name": file_name}
