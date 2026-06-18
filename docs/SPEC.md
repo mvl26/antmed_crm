@@ -14,7 +14,7 @@
 ## 1. Phạm vi
 
 - **In scope**: 24 màn prototype (A1–I1), trong app `frontend/` (Vue 3 + frappe-ui + Tailwind), phục vụ tại `/crm`.
-- **Out of scope**: backend AntMed (`crm.api.antmed.*`), wiring dữ liệu thật, business rule, RBAC thực thi. Prototype dùng dữ liệu mẫu.
+- **Out of scope**: backend AntMed (`antmed_crm.api.antmed.*`), wiring dữ liệu thật, business rule, RBAC thực thi. Prototype dùng dữ liệu mẫu.
 - **Không phá**: route + page CRM gốc và các page AntMed real-data hiện có (`AntmedHospitalList/Detail`, `AntmedDoctorDetail`, `AntmedContracts`) vẫn còn (reachable), không xoá.
 
 ## 2. Kiến trúc prototype
