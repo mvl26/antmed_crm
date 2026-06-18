@@ -650,6 +650,233 @@ export function getExpiryAlerts({ auto = false } = {}) {
   })
 }
 
+// ── M03 Slice M03-S4: Wizard kho (Xuất cho NV / Nhập kho / Kiểm kê — mockup C2) ─
+
+/**
+ * Quét QR/Barcode 1 lô hoặc VTYT — antmed_crm.api.antmed.inventory.scan_lot (GET).
+ * BE: scan_lot(code, warehouse?) -> RAW dict THƯỜNG (KHÔNG bọc { data, total_count }), shape ổn định
+ *   SCAN_LOT_KEYS (Hyrum): { found(bool), reason('ok'|'not_found'|'no_perm'), item, item_name, lot,
+ *   lot_no, expiry_date, uom, unit_price, requires_cocq(0/1), has_co(bool), has_cq(bool),
+ *   cocq_ok(bool), recall_status, available_qty(float|null), days_to_expiry(int|null),
+ *   is_fifo_priority(bool|null), suggested_lot }.
+ *   - code = lot_no (== AntMed Lot.name) HOẶC item_code (== AntMed Item.name) → gợi ý lô FIFO ở kho.
+ *   - found=false → reason giải thích (not_found / no_perm — BR-13 fail-closed, KHÔNG 500).
+ *   - cocq_ok (BR-03): requires_cocq mà lô thiếu CO/CQ → false (FE wizard HARD-BLOCK 'Xuất').
+ *
+ * ⚠️ Dict THƯỜNG, KHÔNG bọc → FE đọc `r.data.found` / `r.data.item_name`… TRỰC TIẾP (KHÔNG .data.data).
+ * auto:false — chỉ fetch khi quét/nhập mã (`.submit({ code, warehouse })`). method:'GET' tường minh.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo (thường rỗng — truyền qua .submit).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false).
+ */
+export function scanLot({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.scan_lot',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Gợi ý lô theo FIFO cho 1 VTYT — antmed_crm.api.antmed.inventory.fifo_suggest (GET).
+ * BE: fifo_suggest(item, warehouse, qty=1) -> RAW dict THƯỜNG:
+ *   { item, warehouse, requested_qty, fulfillable(bool), shortage(float),
+ *     lots:[{ lot, lot_no, expiry_date, available_qty, take_qty }] }.
+ *   - lots = chuỗi lô đề xuất rút theo HSD sớm nhất (FIFO BR-08), BE đã sort → FE KHÔNG sort lại.
+ *
+ * ⚠️ Dict THƯỜNG, KHÔNG bọc → đọc `r.data.lots` / `r.data.fulfillable` TRỰC TIẾP. auto:false.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ item, warehouse, qty }).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false).
+ */
+export function fifoSuggest({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.fifo_suggest',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Kiểm tra lô đang chọn có đúng ưu tiên FIFO không — antmed_crm.api.antmed.inventory.check_fifo (GET).
+ * BE: check_fifo(item, warehouse, lot) -> RAW dict THƯỜNG:
+ *   { is_priority(bool), chosen_lot, chosen_expiry, suggested_lot, suggested_expiry }.
+ *   - is_priority=false → lô đang chọn KHÔNG phải HSD sớm nhất (FE chip cảnh báo 'Không ưu tiên FIFO').
+ *
+ * ⚠️ Dict THƯỜNG, KHÔNG bọc → đọc `r.data.is_priority` TRỰC TIẾP. auto:false.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ item, warehouse, lot }).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false).
+ */
+export function checkFifo({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.check_fifo',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Tạo + submit 1 phiếu kho (Xuất cho NV / Nhập NCC / Chuyển kho) — antmed_crm.api.antmed.inventory
+ *   .create_stock_entry (POST, MUTATION).
+ * BE: create_stock_entry(entry_type, items, from_warehouse?, to_warehouse?, nv_employee?, hospital?,
+ *   reason?) -> RAW dict { name, entry_type, docstatus }.
+ *   - items = list dict [{ item, lot?, qty, uom?, unit_price? }]. createResource tự JSON-hoá array
+ *     (BE nhận `items: str | list` → json.loads nếu là string) → FE truyền array trực tiếp.
+ *   - Xuất cho NV: entry_type='Xuất cho NV', from_warehouse=kho Tổng, nv_employee=user.
+ *   - Nhập NCC: entry_type='Nhập NCC', to_warehouse=kho đến.
+ *   - Submit → ghi sổ tồn + tồn-không-âm; BR-xx (FIFO/quota…) frappe.throw → FE bắt onError → toast VI.
+ *
+ * ⚠️ MUTATION: gọi `.submit({ entry_type, items, ... })`. Sau success → reload list phiếu. auto:false.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo (thường rỗng — truyền qua .submit).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — chỉ submit khi xác nhận).
+ */
+export function createStockEntry({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.create_stock_entry',
+    method: 'POST',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Danh sách kho — antmed_crm.api.antmed.inventory.list_warehouses (GET).
+ * BE: list_warehouses(warehouse_type?, filters?, start?, page_length?) -> { data, total_count }.
+ *   Mỗi item: name, warehouse_name, warehouse_type, employee, hospital, disabled.
+ *   - warehouse_type ∈ options DocType `AntMed Warehouse.warehouse_type` (VI có dấu):
+ *     Tổng / Cá nhân NV / Ký gửi BV. Lọc warehouse_type='Tổng' cho dropdown 'Kho nguồn'/'Kho đến'.
+ *
+ * ⚠️ List trả dict bọc → đọc `r.data.data` + `r.data.total_count` (KHÔNG createListResource).
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ warehouse_type?, start?, page_length? }).
+ * @param {boolean} [opts.auto] - auto-fetch.
+ */
+export function listWarehouses({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_warehouses',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Dropdown NV nhận phiếu xuất — antmed_crm.api.antmed.delivery.list_assignable_employees (GET).
+ * BE: list_assignable_employees() -> { data:[{ value: <user>, label: <full_name> }] }.
+ *   - NV role 'NV kinh doanh' / 'Quản lý', user active. value = User.name (gửi BE = nv_employee),
+ *     label = full_name (KHÔNG leak email ra UI). Tái dùng từ M04 (S2 'Gán NV').
+ *
+ * ⚠️ Dict bọc key `data` → đọc `r.data.data` (mảng option). method:'GET' tường minh.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.auto] - auto-fetch.
+ */
+export function listAssignableEmployees({ auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.delivery.list_assignable_employees',
+    method: 'GET',
+    auto,
+  })
+}
+
+/**
+ * Snapshot tồn 1 kho cho phiếu Kiểm kê — antmed_crm.api.antmed.inventory.stock_count_snapshot (GET).
+ * BE: stock_count_snapshot(warehouse) -> RAW dict THƯỜNG:
+ *   { warehouse, rows:[{ item, item_name, lot, lot_no, expiry_date, system_qty }] }.
+ *   - rows = mọi (item × lot) còn tồn >0 ở kho (1 query gộp, KHÔNG N+1).
+ *   - BR-13 fail-closed: thiếu read-perm → rows:[] (KHÔNG rò, KHÔNG 500).
+ *
+ * ⚠️ Dict THƯỜNG, KHÔNG bọc → đọc `r.data.rows` TRỰC TIẾP (KHÔNG .data.data). auto:false.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ warehouse }).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — cần warehouse).
+ */
+export function stockCountSnapshot({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.stock_count_snapshot',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Tạo + submit phiếu Kiểm kê — antmed_crm.api.antmed.inventory.create_stock_count (POST, MUTATION).
+ * BE: create_stock_count(warehouse, items, note?) -> RAW dict { name, docstatus, total_variance_qty }.
+ *   - items = list dict [{ item, lot?, counted_qty }]. system_qty/variance do controller TỰ TÍNH
+ *     (authoritative tại submit) → FE KHÔNG gửi system_qty/variance.
+ *   - Submit → ghi điều chỉnh sổ tồn đưa tồn về SL thực đếm.
+ *
+ * ⚠️ MUTATION: gọi `.submit({ warehouse, items, note })`. Sau success → reload snapshot + lịch sử.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo (thường rỗng — truyền qua .submit).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — chỉ submit khi chốt).
+ */
+export function createStockCount({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.create_stock_count',
+    method: 'POST',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Lịch sử phiếu Kiểm kê — antmed_crm.api.antmed.inventory.list_stock_counts (GET).
+ * BE: list_stock_counts(warehouse?, filters?, start?, page_length?) -> { data, total_count }.
+ *   Mỗi item: name, warehouse, count_datetime, docstatus, total_variance_qty, counted_by,
+ *   counted_by_name (User.full_name dotted-fetch).
+ *   - BR-13 fail-closed: noperm → { data:[], total_count:0 } (KHÔNG rò).
+ *
+ * ⚠️ List trả dict bọc → đọc `r.data.data` + `r.data.total_count` (KHÔNG createListResource).
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ warehouse?, start?, page_length? }).
+ * @param {boolean} [opts.auto] - auto-fetch.
+ */
+export function listStockCounts({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_stock_counts',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Chi tiết 1 phiếu Kiểm kê (drill-down) — antmed_crm.api.antmed.inventory.get_stock_count (GET).
+ * BE: get_stock_count(name) -> RAW dict THƯỜNG:
+ *   { name, warehouse, warehouse_name, count_datetime, counted_by, counted_by_name,
+ *     total_variance_qty, note, docstatus,
+ *     items:[{ item, item_name, lot, lot_no, expiry_date, system_qty, counted_qty, variance }] }.
+ *
+ * ⚠️ Dict THƯỜNG, KHÔNG bọc → đọc `r.data.items` / `r.data.name` TRỰC TIẾP (KHÔNG .data.data). auto:false.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ name }).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — cần name).
+ */
+export function getStockCount({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.get_stock_count',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
 // ── M10 Slice M10-1: "Quản lý Đội ngũ" (Trưởng phòng KD — mockup B2) ─────────
 
 /**
@@ -1207,6 +1434,16 @@ export function listTenders({ params = {}, auto = false } = {}) {
   })
 }
 
+/** Chi tiết 1 gói thầu (RAW dict + hospital_name + deal + won_contract). GET pipeline.get_tender. */
+export function getTender({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.get_tender',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
 /** Dự báo doanh số pipeline (RAW {total_weighted, by_stage}). GET pipeline.forecast. */
 export function getTenderForecast({ auto = false } = {}) {
   return createResource({
@@ -1232,6 +1469,94 @@ export function getLeadStatuses({ auto = false } = {}) {
     url: 'antmed_crm.api.antmed.pipeline.lead_statuses',
     method: 'GET',
     auto,
+  })
+}
+
+/**
+ * Phễu pipeline gói thầu (header màn Lead, mockup "Pipeline gói thầu") —
+ *   antmed_crm.api.antmed.pipeline.lead_funnel (GET, KHÔNG params).
+ * BE: lead_funnel() -> RAW dict THƯỜNG (KHÔNG bọc { data, total_count }):
+ *   { stages: [{ key, label, count }] }  — ĐÚNG 5 tầng, đúng thứ tự funnel:
+ *     lead ('Lead', CRM Lead count) → khao_sat ('Khảo sát') → bao_gia ('Báo giá')
+ *     → du_thau ('Dự thầu') → trung ('Trúng')  (4 tầng sau = AntMed Tender đếm theo status).
+ *   count đếm DƯỚI permission (BR-13 — get_list scoped) → user thiếu read → tầng đó count=0 (fail-soft).
+ *
+ * ⚠️ Dict THƯỜNG → FE đọc `r.data.stages` TRỰC TIẾP (KHÔNG .data.data — cùng idiom getTenderPipeline).
+ *    label đến THẲNG từ BE (đã VI) → FE render s.label, KHÔNG tự map từ key.
+ * ⚠️⚠️ BẮT BUỘC `method: 'GET'` (endpoint @frappe.whitelist(methods=["GET"]); KHÔNG params →
+ *    createResource mặc định gửi POST → BE reject 403 "Not permitted", như tender_pipeline/revenue_mix).
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.auto] - auto-fetch.
+ * @param {function} [opts.onError] - callback lỗi (toast).
+ */
+export function getLeadFunnel({ auto = false, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.lead_funnel',
+    method: 'GET',
+    auto,
+    onError,
+  })
+}
+
+/**
+ * Chi tiết 1 Lead (drawer màn Lead) — antmed_crm.api.antmed.pipeline.get_lead (GET, params {name}).
+ * BE: get_lead(name) -> RAW dict THƯỜNG (KHÔNG bọc { data, total_count }):
+ *   { name, lead_name, organization, status, territory, mobile_no, email_id, annual_revenue,
+ *     lead_owner, lead_owner_name, source, tender }.
+ *   - lead_owner_name = User.full_name (KHÔNG lộ email lead_owner ra UI).
+ *   - tender = tên AntMed Tender đã gắn source_lead (đã qualify) hoặc null (chưa qualify → hiện nút).
+ *   - BR-13 fail-closed: user thiếu read-perm Lead → PermissionError (FE bắt onError → toast VI).
+ *
+ * ⚠️ Dict THƯỜNG → FE đọc `r.data.lead_name` / `r.data.tender` / `r.data.email_id`… TRỰC TIẾP
+ *    (KHÔNG .data.data — cùng idiom getLot/getStockEntry). createResource (KHÔNG list-resource).
+ * auto:false — chỉ fetch khi click 1 dòng lead (`.submit({ name })` / `.fetch()`). method:'GET' tường minh.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo ({ name }).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — cần name).
+ * @param {function} [opts.onError] - callback lỗi (toast).
+ */
+export function getLead({ params = {}, auto = false, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.get_lead',
+    method: 'GET',
+    params,
+    auto,
+    onError,
+  })
+}
+
+/**
+ * Qualify 1 Lead → tạo gói thầu (AntMed Tender) — antmed_crm.api.antmed.pipeline
+ *   .convert_lead_to_tender (POST, MUTATION).
+ * BE: convert_lead_to_tender(name, estimated_value?) -> RAW dict { lead, tender, created }.
+ *   - IDEMPOTENT: lead đã có tender → trả tender cũ với created=false (KHÔNG tạo trùng).
+ *   - estimated_value optional (giá trị dự kiến gói thầu) — bỏ trống = null.
+ *   - BR-13: user thiếu quyền create AntMed Tender / read Lead → PermissionError → FE toast VI.
+ *
+ * ⚠️ MUTATION: gọi `.submit({ name, estimated_value })`. Dict THƯỜNG → đọc `r.data.tender`
+ *    / `r.data.created` TRỰC TIẾP (KHÔNG .data.data). Sau success → reload getLead + getLeadFunnel + list.
+ *
+ * @param {object} [opts]
+ * @param {object} [opts.params] - params khởi tạo (thường rỗng — truyền qua .submit).
+ * @param {boolean} [opts.auto] - auto-fetch (mặc định false — chỉ submit khi xác nhận).
+ * @param {function} [opts.onSuccess] - callback thành công (toast + reload).
+ * @param {function} [opts.onError] - callback lỗi (toast).
+ */
+export function convertLeadToTender({
+  params = {},
+  auto = false,
+  onSuccess,
+  onError,
+} = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.convert_lead_to_tender',
+    method: 'POST',
+    params,
+    auto,
+    onSuccess,
+    onError,
   })
 }
 
@@ -1309,5 +1634,295 @@ export function useGlobalSearch() {
   return createResource({
     url: 'antmed_crm.api.antmed.search.global_search',
     method: 'GET',
+  })
+}
+
+/**
+ * AntMed — Dòng thời gian hoạt động (Ghi chú + Công việc) gắn 1 bản ghi AntMed:
+ * antmed_crm.api.antmed.notes.activity (GET). RAW dict
+ *   { events:[{type,name,time,text,sub,highlight}], note_count, task_count }
+ * → đọc board.data.events cho AmTimeline. method:'GET' bắt buộc (endpoint GET-only).
+ */
+export function getActivity({
+  referenceDoctype,
+  referenceDocname,
+  auto = false,
+} = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.notes.activity',
+    method: 'GET',
+    params: {
+      reference_doctype: referenceDoctype,
+      reference_docname: referenceDocname,
+    },
+    auto,
+  })
+}
+
+/**
+ * AntMed — Thêm ghi chú vào bản ghi AntMed: antmed_crm.api.antmed.notes.add_note (POST mutation).
+ * Gọi `.submit({ reference_doctype, reference_docname, content, title })` → trả { name, title, content }.
+ */
+export function addNote({ onSuccess, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.notes.add_note',
+    method: 'POST',
+    onSuccess,
+    onError,
+  })
+}
+
+// ── M08 (gộp): Pipeline Cơ hội = CRM Deal (kế thừa Frappe CRM) ────────────────
+
+/** Kanban Cơ hội: GET pipeline.deal_board → {stages, by_stage, forecast}. RAW dict → r.data.* */
+export function getDealBoard({ auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.deal_board',
+    method: 'GET',
+    auto,
+  })
+}
+
+/** Chi tiết 1 Cơ hội (CRM Deal). GET pipeline.get_deal. */
+export function getDeal({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.pipeline.get_deal',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/** Nhãn VN cho giai đoạn CRM Deal Status (UI hiển thị tiếng Việt; KEY khớp record EN). */
+export const DEAL_STAGE_LABEL = {
+  Qualification: 'Sàng lọc',
+  'Demo/Making': 'Demo / Giới thiệu',
+  'Proposal/Quotation': 'Báo giá',
+  Negotiation: 'Đàm phán',
+  'Ready to Close': 'Sẵn sàng chốt',
+  Won: 'Thắng',
+  Lost: 'Thua',
+}
+export const DEAL_STAGE_THEME = {
+  Qualification: 'gray',
+  'Demo/Making': 'blue',
+  'Proposal/Quotation': 'orange',
+  Negotiation: 'teal',
+  'Ready to Close': 'teal',
+  Won: 'green',
+  Lost: 'red',
+}
+export const DEAL_STAGE_DOT = {
+  Qualification: 'bg-ink-gray-4',
+  'Demo/Making': 'bg-blue-500',
+  'Proposal/Quotation': 'bg-orange-500',
+  Negotiation: 'bg-teal-500',
+  'Ready to Close': 'bg-teal-600',
+  Won: 'bg-green-500',
+  Lost: 'bg-red-500',
+}
+
+// ── M03 D3: Truy vết lot làm giàu (phả hệ ca mổ) + lưu vết + Quản lý lot ──────
+
+/**
+ * Cây phả hệ tiêu thụ 1 lô tại ca mổ — antmed_crm.api.antmed.inventory.lot_genealogy (GET).
+ * BE trả dict THƯỜNG { lot, item, item_name, deliveries:[{ delivery, status, hospital,
+ *   hospital_name, doctor, doctor_name, surgery_datetime, surgery_room, used_qty, einvoice,
+ *   einvoice_status, einvoice_pdf }] } → FE đọc r.data.deliveries TRỰC TIẾP.
+ */
+export function getLotGenealogy({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.lot_genealogy',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Lưu 1 bản truy vết lô (snapshot audit/recall) — inventory.save_lot_trace (POST mutation).
+ * BE trả { name, generated_at, affected_hospitals }. Gọi .submit({ lot, note }).
+ */
+export function saveLotTrace({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.save_lot_trace',
+    method: 'POST',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Danh sách bản truy vết đã lưu — inventory.list_lot_traces (GET).
+ * BE trả bọc { data:[{name,lot,lot_no,requested_by,requested_by_name,generated_at,
+ *   affected_hospitals}], total_count } → đọc r.data.data + r.data.total_count.
+ */
+export function listLotTraces({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_lot_traces',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Chi tiết 1 bản truy vết đã lưu — inventory.get_lot_trace_request (GET).
+ * BE trả dict THƯỜNG { name, lot, lot_no, requested_by, requested_by_name, generated_at,
+ *   affected_hospitals, note, graph } → đọc r.data.graph TRỰC TIẾP.
+ */
+export function getLotTraceRequest({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.get_lot_trace_request',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Danh sách lô (màn Quản lý lot) — inventory.list_lots (GET).
+ * BE trả bọc { data:[{name,lot_no,item,item_name,supplier,expiry_date,recall_status}],
+ *   total_count } → đọc r.data.data. search khớp lot_no; params.item lọc theo VTYT;
+ *   params.filters (object) PHẢI JSON.stringify nếu lọc recall_status.
+ */
+export function listLots({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_lots',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Danh mục VTYT (dropdown lọc) — inventory.list_items (GET).
+ * BE trả bọc { data:[{name,item_code,item_name,classification,requires_cocq,shelf_life_months}],
+ *   total_count } → đọc r.data.data.
+ */
+export function listItems({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_items',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+// ── M03 D3: Thông báo thu hồi (Recall Notification) + export PDF truy vết ──────
+
+/**
+ * Danh sách thông báo thu hồi — inventory.list_recall_notifications (GET).
+ * BE bọc { data:[{name,lot,lot_no,item,status,initiated_at,affected_count,notified_count}],
+ *   total_count } → đọc r.data.data.
+ */
+export function listRecallNotifications({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.list_recall_notifications',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Chi tiết 1 thông báo thu hồi — inventory.get_recall_notification (GET).
+ * BE dict THƯỜNG { name, lot, lot_no, item, status, reason, initiated_by, initiated_at,
+ *   affected_count, notified_count, hospitals:[{hospital,hospital_name,qty_consignment,
+ *   qty_delivered}] } → đọc r.data.hospitals TRỰC TIẾP.
+ */
+export function getRecallNotification({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.get_recall_notification',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+
+/**
+ * Xuất PDF 1 bản truy vết đã lưu — inventory.export_lot_trace_pdf (POST mutation).
+ * BE trả { name, exported_pdf, file_name }. Gọi .submit({ name }) → mở exported_pdf để tải.
+ */
+export function exportLotTracePdf({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.inventory.export_lot_trace_pdf',
+    method: 'POST',
+    params,
+    auto,
+  })
+}
+
+// ── M07 CRM Bác sỹ: CSKH (ghi chú/ghé thăm/quà) + nhật ký cuộc gọi (doctor_care.*) ──
+export function listCareNotes({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.list_care_notes',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+export function saveCareNote({ onSuccess, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.save_care_note',
+    method: 'POST',
+    onSuccess,
+    onError,
+  })
+}
+export function listVisits({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.list_visits',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+export function getVisit({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.get_visit',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+export function listGifts({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.list_gifts',
+    method: 'GET',
+    params,
+    auto,
+  })
+}
+export function createGift({ onSuccess, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.create_gift',
+    method: 'POST',
+    onSuccess,
+    onError,
+  })
+}
+export function checkInDoctor({ onSuccess, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.check_in',
+    method: 'POST',
+    onSuccess,
+    onError,
+  })
+}
+export function logCall({ onSuccess, onError } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.log_call',
+    method: 'POST',
+    onSuccess,
+    onError,
+  })
+}
+export function listCallLogs({ params = {}, auto = false } = {}) {
+  return createResource({
+    url: 'antmed_crm.api.antmed.doctor_care.list_call_logs',
+    method: 'GET',
+    params,
+    auto,
   })
 }
