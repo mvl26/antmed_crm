@@ -32,9 +32,18 @@
       class="flex flex-col items-center gap-3 py-16 text-center"
       role="alert"
     >
-      <Badge variant="subtle" theme="red" size="lg" :label="__('Không tải được')" />
+      <Badge
+        variant="subtle"
+        theme="red"
+        size="lg"
+        :label="__('Không tải được')"
+      />
       <p class="max-w-md text-p-sm text-ink-gray-6">{{ errorMessage }}</p>
-      <Button variant="outline" :label="__('Thử lại')" @click="contract.reload()" />
+      <Button
+        variant="outline"
+        :label="__('Thử lại')"
+        @click="contract.reload()"
+      />
     </div>
 
     <!-- Data -->
@@ -97,10 +106,7 @@
       </header>
 
       <!-- Card bảng quota tiêu hao -->
-      <section
-        class="px-6 pb-8"
-        aria-labelledby="antmed-contract-quota-title"
-      >
+      <section class="px-6 pb-8" aria-labelledby="antmed-contract-quota-title">
         <h2
           id="antmed-contract-quota-title"
           class="mb-3 text-base font-semibold text-ink-gray-8"
@@ -117,19 +123,22 @@
           {{ __('Chưa có dòng quota') }}
         </div>
 
-        <table
-          v-else
-          class="w-full border-separate border-spacing-0 text-left"
-        >
+        <table v-else class="w-full border-separate border-spacing-0 text-left">
           <caption class="sr-only">
-            {{ __('Bảng hạn ngạch tiêu hao theo vật tư') }}
+            {{
+              __('Bảng hạn ngạch tiêu hao theo vật tư')
+            }}
           </caption>
           <thead>
             <tr class="text-p-sm text-ink-gray-6">
-              <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">
+              <th
+                class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+              >
                 {{ __('Vật tư') }}
               </th>
-              <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">
+              <th
+                class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+              >
                 {{ __('ĐVT') }}
               </th>
               <th
@@ -147,7 +156,9 @@
               >
                 {{ __('Đã dùng') }}
               </th>
-              <th class="border-b border-outline-gray-modals py-2 pr-4 font-medium">
+              <th
+                class="border-b border-outline-gray-modals py-2 pr-4 font-medium"
+              >
                 {{ __('Đã tiêu hao') }}
               </th>
               <th class="border-b border-outline-gray-modals py-2 font-medium">
@@ -166,7 +177,9 @@
               >
                 {{ row.item_name || row.item || '—' }}
               </td>
-              <td class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7">
+              <td
+                class="border-b border-outline-gray-1 py-3 pr-4 text-ink-gray-7"
+              >
                 {{ row.uom || '—' }}
               </td>
               <td
@@ -240,6 +253,15 @@
           @retry="consumption.reload()"
         />
       </section>
+
+      <!-- Hoạt động: dòng thời gian Ghi chú + Công việc gắn HĐ này
+           (port FCRM Note + CRM Task → dùng cho AntMed, qua reference_doctype/docname). -->
+      <section class="px-6 pb-10" :aria-label="__('Hoạt động hợp đồng')">
+        <AntmedActivityPanel
+          reference-doctype="AntMed Contract"
+          :reference-docname="contract.data.name"
+        />
+      </section>
     </template>
   </main>
 </template>
@@ -250,6 +272,7 @@ import { useRouter } from 'vue-router'
 import { Badge, Button, FeatherIcon, toast } from 'frappe-ui'
 import LoadingIndicator from '@/components/Icons/LoadingIndicator.vue'
 import AntmedConsumptionChartCard from '@/components/Antmed/AntmedConsumptionChartCard.vue'
+import AntmedActivityPanel from '@/components/Antmed/AntmedActivityPanel.vue'
 import {
   getContract,
   getContractConsumptionByMonth,
