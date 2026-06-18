@@ -85,7 +85,54 @@ def set_tender_result(name: str, result: str, decision_no: str | None = None) ->
 	frappe.db.set_value(
 		TENDER_DOCTYPE, name, {"status": result, "result": result, "decision_no": decision_no, "win_probability_pct": win_pct}
 	)
-	return {"name": name, "status": result, "decision_no": decision_no}
+	won_contract = None
+	if result == "Trúng":
+		won_contract = _ensure_won_contract(name)
+	return {"name": name, "status": result, "decision_no": decision_no, "won_contract": won_contract}
+
+
+def _ensure_won_contract(tender_name: str) -> str | None:
+	"""BR-M08-05: gói Trúng → tạo HĐ NHÁP (AntMed Contract) từ gói thầu. Idempotent (skip nếu đã có)."""
+	existing = frappe.db.get_value(TENDER_DOCTYPE, tender_name, "won_contract")
+	if existing:
+		return existing
+	from frappe.utils import nowdate
+
+	tender = frappe.get_doc(TENDER_DOCTYPE, tender_name)
+	contract_no = f"HD-{tender.tender_no}"
+	if frappe.db.exists("AntMed Contract", {"contract_no": contract_no}):
+		c_name = frappe.db.get_value("AntMed Contract", {"contract_no": contract_no}, "name")
+	else:
+		c = frappe.get_doc(
+			{
+				"doctype": "AntMed Contract",
+				"contract_no": contract_no,
+				"hospital": tender.hospital,
+				"signed_date": nowdate(),
+				"status": "Nháp",
+				"total_value": tender.estimated_value,
+			}
+		)
+		c.insert(ignore_permissions=True)
+		c_name = c.name
+	frappe.db.set_value(TENDER_DOCTYPE, tender_name, "won_contract", c_name)
+	return c_name
+
+
+@frappe.whitelist(methods=["GET"])
+def forecast() -> dict:
+	"""Dự báo doanh số pipeline = Σ(estimated_value × win_probability_pct/100), gộp theo giai đoạn.
+
+	Trả {total_weighted, by_stage:[{stage, weighted}]}. Đọc dưới DocPerm.
+	"""
+	rows = frappe.get_list(TENDER_DOCTYPE, fields=["status", "estimated_value", "win_probability_pct"], limit_page_length=0)
+	total = 0.0
+	by_stage: dict = {}
+	for r in rows:
+		w = float(r.get("estimated_value") or 0) * float(r.get("win_probability_pct") or 0) / 100.0
+		total += w
+		by_stage[r.get("status")] = by_stage.get(r.get("status"), 0.0) + w
+	return {"total_weighted": round(total, 2), "by_stage": [{"stage": s, "weighted": round(v, 2)} for s, v in by_stage.items()]}
 
 
 @frappe.whitelist(methods=["GET"])
