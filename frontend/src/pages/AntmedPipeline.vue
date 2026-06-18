@@ -9,7 +9,7 @@
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 id="antmed-pipeline-title" class="text-xl font-semibold text-ink-gray-9">🎯 {{ __('Pipeline gói thầu') }}</h1>
-          <p class="text-p-sm text-ink-gray-6">{{ __('Theo dõi gói thầu qua 6 giai đoạn — tiếp cận → khảo sát → báo giá → dự thầu → trúng/trượt') }}</p>
+          <p class="text-p-sm text-ink-gray-6">{{ __('Kéo thả thẻ giữa các cột để đổi giai đoạn (2 chiều). Thả vào “Trúng/Trượt” để chốt kết quả.') }}</p>
         </div>
         <Button variant="solid" theme="teal" :label="__('+ Tạo gói thầu')" @click="openCreate" />
       </div>
@@ -41,12 +41,16 @@
         <Button variant="outline" :label="__('Thử lại')" @click="tenders.reload()" />
       </div>
 
-      <!-- Kanban 6 cột -->
+      <!-- Kanban 6 cột — KÉO THẢ 2 chiều (HTML5 native DnD, không phụ thuộc thư viện) -->
       <div v-else class="flex gap-3 overflow-x-auto pb-2">
         <div
           v-for="stage in TENDER_STAGES"
           :key="stage"
-          class="flex w-72 shrink-0 flex-col rounded-xl bg-surface-gray-1 p-2"
+          class="flex w-72 shrink-0 flex-col rounded-xl bg-surface-gray-1 p-2 transition-colors"
+          :class="dragOverStage === stage ? 'ring-2 ring-teal-400 ring-offset-1' : ''"
+          @dragover="onDragOver(stage, $event)"
+          @dragleave="onDragLeave(stage)"
+          @drop="onDrop(stage, $event)"
         >
           <div class="mb-2 flex items-center justify-between px-1.5 pt-1">
             <span class="flex items-center gap-1.5 text-p-sm font-semibold text-ink-gray-8">
@@ -58,66 +62,115 @@
             </span>
           </div>
 
-          <div class="flex flex-col gap-2">
+          <div class="flex min-h-[80px] flex-1 flex-col gap-2">
             <article
               v-for="t in byStage[stage] || []"
               :key="t.name"
-              class="rounded-lg border border-outline-gray-2 bg-surface-white p-3 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
+              draggable="true"
+              class="cursor-grab select-none rounded-lg border border-outline-gray-2 bg-surface-white p-3 transition-all duration-150 hover:shadow-md active:cursor-grabbing"
+              :class="dragged && dragged.name === t.name ? 'opacity-40' : ''"
+              @dragstart="onDragStart(t, $event)"
+              @dragend="onDragEnd"
             >
               <div class="flex items-start justify-between gap-2">
                 <span class="text-p-xs font-medium text-teal-700">{{ t.tender_no }}</span>
-                <Badge variant="subtle" :theme="stageTheme(t.status)" size="sm" :label="t.win_probability_pct != null ? t.win_probability_pct + '%' : '—'" />
+                <Badge
+                  variant="subtle"
+                  :theme="stageTheme(t.status)"
+                  size="sm"
+                  :label="t.win_probability_pct != null ? t.win_probability_pct + '%' : '—'"
+                />
               </div>
               <p class="mt-0.5 text-p-sm font-semibold text-ink-gray-9">{{ t.tender_name }}</p>
               <p class="mt-0.5 text-p-xs text-ink-gray-5">🏥 {{ t.hospital_name || '—' }}</p>
               <p class="mt-1 text-p-sm font-medium tabular-nums text-ink-gray-8">{{ formatVnMoney(t.estimated_value || 0) }} ₫</p>
+              <p v-if="t.status === 'Trúng' && t.decision_no" class="mt-1 text-p-xs font-medium text-green-700">
+                {{ __('QĐ') }}: {{ t.decision_no }}
+              </p>
 
-              <div class="mt-2 flex flex-wrap gap-1.5">
-                <Button
-                  v-if="nextStage(t.status)"
-                  variant="subtle"
-                  size="sm"
-                  :loading="moveRes.loading"
-                  :label="`→ ${nextStage(t.status)}`"
-                  @click="move(t)"
-                />
-                <Button
-                  v-if="t.status === 'Dự thầu'"
-                  variant="solid"
-                  theme="teal"
-                  size="sm"
-                  :label="__('Chốt kết quả')"
-                  @click="openResult(t)"
-                />
-                <span v-if="t.status === 'Trúng' && t.decision_no" class="text-p-xs text-green-700">{{ __('QĐ') }}: {{ t.decision_no }}</span>
-              </div>
+              <!-- Xem chi tiết (click không kích hoạt kéo) -->
+              <RouterLink
+                :to="`/antmed/tenders/${encodeURIComponent(t.name)}`"
+                class="mt-2 inline-flex items-center gap-1 rounded text-p-xs font-medium text-teal-700 hover:text-teal-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
+                draggable="false"
+                :aria-label="__('Xem chi tiết gói thầu {0}', [t.tender_no])"
+                @click.stop
+              >
+                {{ __('Xem chi tiết') }} →
+              </RouterLink>
             </article>
 
-            <p v-if="!(byStage[stage] || []).length" class="px-1.5 py-3 text-p-xs text-ink-gray-4">{{ __('Trống') }}</p>
+            <p v-if="!(byStage[stage] || []).length" class="px-1.5 py-2 text-center text-p-xs text-ink-gray-4">
+              {{ __('Kéo thẻ vào đây') }}
+            </p>
           </div>
         </div>
       </div>
     </section>
 
     <!-- Dialog tạo gói thầu -->
-    <Dialog v-model="createDlg" :options="{ title: __('Tạo gói thầu mới') }">
+    <Dialog v-model="createDlg" :options="{ title: __('Tạo gói thầu mới'), size: 'xl' }">
       <template #body-content>
         <div class="bg-surface-modal px-4 pb-6 pt-5 sm:px-6">
-          <div class="flex flex-col gap-4">
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormControl :label="__('Số gói thầu')" v-model="cForm.tender_no" placeholder="TND-2026-008" />
+          <div class="flex flex-col gap-5">
+            <fieldset class="flex flex-col gap-3">
+              <legend
+                class="mb-1 text-p-xs font-semibold uppercase tracking-wide text-ink-gray-5"
+              >
+                {{ __('Thông tin gói thầu') }}
+              </legend>
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormControl
+                  :label="__('Số gói thầu') + ' *'"
+                  v-model="cForm.tender_no"
+                  placeholder="TND-2026-008"
+                  required
+                />
+                <FormControl
+                  type="select"
+                  :label="__('Bệnh viện')"
+                  v-model="cForm.hospital"
+                  :options="hospitalOptions"
+                />
+              </div>
               <FormControl
-                type="select"
-                :label="__('Bệnh viện')"
-                v-model="cForm.hospital"
-                :options="hospitalOptions"
+                :label="__('Tên gói thầu') + ' *'"
+                v-model="cForm.tender_name"
+                :placeholder="__('Gói VTYT…')"
+                required
               />
-            </div>
-            <FormControl :label="__('Tên gói thầu')" v-model="cForm.tender_name" :placeholder="__('Gói VTYT…')" />
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormControl type="number" :label="__('Giá trị ước tính (₫)')" v-model="cForm.estimated_value" />
-              <FormControl :label="__('Nguồn')" v-model="cForm.source" :placeholder="__('Mời thầu / Tự tìm')" />
-            </div>
+              <FormControl
+                :label="__('Nguồn')"
+                v-model="cForm.source"
+                :placeholder="__('Mời thầu / Tự tìm')"
+              />
+            </fieldset>
+            <fieldset
+              class="flex flex-col gap-3 border-t border-outline-gray-1 pt-4"
+            >
+              <legend
+                class="mb-1 text-p-xs font-semibold uppercase tracking-wide text-ink-gray-5"
+              >
+                {{ __('Tài chính & thời hạn') }}
+              </legend>
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <FormControl
+                  type="number"
+                  :label="__('Giá trị ước tính (₫)')"
+                  v-model="cForm.estimated_value"
+                />
+                <FormControl
+                  type="date"
+                  :label="__('Ngày mở thầu')"
+                  v-model="cForm.bid_open_date"
+                />
+                <FormControl
+                  type="date"
+                  :label="__('Ngày đóng thầu')"
+                  v-model="cForm.bid_close_date"
+                />
+              </div>
+            </fieldset>
           </div>
           <div class="mt-6 flex justify-end gap-2 border-t border-outline-gray-1 pt-4">
             <Button :label="__('Huỷ')" @click="createDlg = false" />
@@ -127,7 +180,7 @@
       </template>
     </Dialog>
 
-    <!-- Dialog chốt kết quả -->
+    <!-- Dialog chốt kết quả (mở khi thả vào cột Trúng hoặc chọn Trúng/Trượt) -->
     <Dialog v-model="resultDlg" :options="{ title: __('Chốt kết quả: {0}', [rForm.tender_no]) }">
       <template #body-content>
         <div class="bg-surface-modal px-4 pb-6 pt-5 sm:px-6">
@@ -138,12 +191,7 @@
             <label class="flex items-center gap-2 text-p-base">
               <input type="radio" value="Trượt" v-model="rForm.result" /> <Badge variant="subtle" theme="red" size="sm" :label="__('Trượt')" />
             </label>
-            <FormControl
-              v-if="rForm.result === 'Trúng'"
-              :label="__('Số quyết định KQLCNT')"
-              v-model="rForm.decision_no"
-              placeholder="QĐ-2026-…"
-            />
+            <FormControl v-if="rForm.result === 'Trúng'" :label="__('Số quyết định KQLCNT')" v-model="rForm.decision_no" placeholder="QĐ-2026-…" />
             <p v-if="rForm.result === 'Trúng'" class="text-p-xs text-ink-gray-5">{{ __('BR-M08: Trúng bắt buộc có số quyết định; hệ thống tự tạo HĐ nháp.') }}</p>
           </div>
           <div class="mt-6 flex justify-end gap-2 border-t border-outline-gray-1 pt-4">
@@ -171,12 +219,14 @@ import {
 import { formatVnMoney } from '@/utils/antmedUi'
 
 const PIPE = 'antmed_crm.api.antmed.pipeline'
+const NON_TERMINAL = ['Tiếp cận', 'Khảo sát', 'Báo giá', 'Dự thầu']
 
 const tenders = listTenders({ params: { page_length: 0 }, auto: true })
 tenders.onError = (err) => toast.error(err?.messages?.[0] || __('Không tải được pipeline'))
 const forecast = getTenderForecast({ auto: true })
 const hospitals = listHospitals({ params: { page_length: 0 }, auto: true })
 
+// Nhóm theo giai đoạn — READ-ONLY computed từ data (BE là nguồn sự thật, KHÔNG mutate cục bộ).
 const byStage = computed(() => {
   const g = Object.fromEntries(TENDER_STAGES.map((s) => [s, []]))
   for (const t of tenders.data?.data || []) {
@@ -203,15 +253,44 @@ function dotClass(s) {
   return DOT[s] || 'bg-ink-gray-4'
 }
 
-// Giai đoạn kế tiếp (chỉ cho 3 stage đầu; Dự thầu → chốt kết quả).
-const FLOW = { 'Tiếp cận': 'Khảo sát', 'Khảo sát': 'Báo giá', 'Báo giá': 'Dự thầu' }
-function nextStage(s) {
-  return FLOW[s] || null
-}
-
 function reloadAll() {
   tenders.reload()
   forecast.reload()
+}
+
+// ── HTML5 native drag-and-drop (2 chiều) ─────────────────────────────────────
+const dragged = ref(null)
+const dragOverStage = ref('')
+function onDragStart(t, e) {
+  dragged.value = t
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    try {
+      e.dataTransfer.setData('text/plain', t.name)
+    } catch {
+      /* một số trình duyệt chặn setData ngoài user-gesture */
+    }
+  }
+}
+function onDragEnd() {
+  dragged.value = null
+  dragOverStage.value = ''
+}
+function onDragOver(stage, e) {
+  e.preventDefault()
+  dragOverStage.value = stage
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+}
+function onDragLeave(stage) {
+  if (dragOverStage.value === stage) dragOverStage.value = ''
+}
+function onDrop(stage, e) {
+  e.preventDefault()
+  dragOverStage.value = ''
+  const t = dragged.value
+  dragged.value = null
+  if (!t || t.status === stage) return
+  applyMove(t, stage)
 }
 
 const moveRes = createResource({
@@ -223,13 +302,30 @@ const moveRes = createResource({
   },
   onError: (err) => toast.error(err?.messages?.[0] || __('Không chuyển được')),
 })
-function move(t) {
-  moveRes.submit({ name: t.name, stage: nextStage(t.status) })
+const resultRes = createResource({
+  url: `${PIPE}.set_tender_result`,
+  method: 'POST',
+  onSuccess() {
+    toast.success(__('Đã chốt kết quả gói thầu'))
+    resultDlg.value = false
+    reloadAll()
+  },
+  onError: (err) => toast.error(err?.messages?.[0] || __('Không chốt được kết quả')),
+})
+
+function applyMove(t, target) {
+  if (NON_TERMINAL.includes(target)) {
+    moveRes.submit({ name: t.name, stage: target })
+  } else if (target === 'Trượt') {
+    resultRes.submit({ name: t.name, result: 'Trượt' })
+  } else if (target === 'Trúng') {
+    openResult(t) // cần số quyết định → dialog
+  }
 }
 
 // Tạo gói thầu
 const createDlg = ref(false)
-const cForm = ref({ tender_no: '', tender_name: '', hospital: '', estimated_value: null, source: '' })
+const cForm = ref({ tender_no: '', tender_name: '', hospital: '', estimated_value: null, source: '', bid_open_date: '', bid_close_date: '' })
 const createRes = createResource({
   url: `${PIPE}.create_tender`,
   method: 'POST',
@@ -241,7 +337,7 @@ const createRes = createResource({
   onError: (err) => toast.error(err?.messages?.[0] || __('Không tạo được gói thầu')),
 })
 function openCreate() {
-  cForm.value = { tender_no: '', tender_name: '', hospital: hospitalOptions.value[0]?.value || '', estimated_value: null, source: '' }
+  cForm.value = { tender_no: '', tender_name: '', hospital: hospitalOptions.value[0]?.value || '', estimated_value: null, source: '', bid_open_date: '', bid_close_date: '' }
   createDlg.value = true
 }
 function onCreate() {
@@ -255,16 +351,6 @@ function onCreate() {
 // Chốt kết quả
 const resultDlg = ref(false)
 const rForm = ref({ name: '', tender_no: '', result: 'Trúng', decision_no: '' })
-const resultRes = createResource({
-  url: `${PIPE}.set_tender_result`,
-  method: 'POST',
-  onSuccess() {
-    toast.success(__('Đã chốt kết quả gói thầu'))
-    resultDlg.value = false
-    reloadAll()
-  },
-  onError: (err) => toast.error(err?.messages?.[0] || __('Không chốt được kết quả')),
-})
 function openResult(t) {
   rForm.value = { name: t.name, tender_no: t.tender_no, result: 'Trúng', decision_no: '' }
   resultDlg.value = true

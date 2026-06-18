@@ -182,6 +182,43 @@ const routes = [
     component: () => import('@/pages/AntmedProfile.vue'),
   },
   {
+    // M08: Pipeline gói thầu (kanban AntMed Tender 6 giai đoạn) — pipeline.list_tenders/forecast.
+    path: '/antmed/tenders',
+    name: 'AntmedTenderPipeline',
+    meta: { role: 'sales' },
+    component: () => import('@/pages/AntmedPipeline.vue'),
+  },
+  {
+    // M08: Chi tiết 1 gói thầu (pipeline.get_tender) — drill-down từ thẻ pipeline.
+    path: '/antmed/tenders/:name',
+    name: 'AntmedTenderDetail',
+    meta: { role: 'sales' },
+    component: () => import('@/pages/AntmedTenderDetail.vue'),
+    props: true,
+  },
+  {
+    // M08: Danh sách Lead (kế thừa CRM Lead, scoped org_hierarchy) — pipeline.list_leads.
+    path: '/antmed/leads',
+    name: 'AntmedLeads',
+    meta: { role: 'sales' },
+    component: () => import('@/pages/AntmedLeads.vue'),
+  },
+  {
+    // M08 (GỘP): Pipeline Cơ hội = CRM Deal (kanban kéo-thả) — pipeline.deal_board.
+    path: '/antmed/deals',
+    name: 'AntmedDealPipeline',
+    meta: { role: 'sales' },
+    component: () => import('@/pages/AntmedDealPipeline.vue'),
+  },
+  {
+    // M08: Chi tiết 1 Cơ hội (CRM Deal) — pipeline.get_deal.
+    path: '/antmed/deals/:name',
+    name: 'AntmedDealDetail',
+    meta: { role: 'sales' },
+    component: () => import('@/pages/AntmedDealDetail.vue'),
+    props: true,
+  },
+  {
     // M10-1: màn Đội ngũ KD (mockup B2, Trưởng phòng KD) — real-data, render trong
     // AntmedLayout (isAntmedPath '/antmed/*'). meta.role='sales' ⇒ sidebar TKD (sales-team active).
     path: '/antmed/sales/team',

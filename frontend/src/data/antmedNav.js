@@ -138,9 +138,24 @@ export const ANTMED_SECTIONS = [
     title: 'Kinh doanh',
     items: [
       {
+        key: 'leads',
+        label: 'Quản lý Lead',
+        icon: '🧲',
+        to: '/antmed/leads',
+        enabled: true,
+      },
+      {
+        // M08 (GỘP): pipeline cơ hội = CRM Deal (kéo-thả). Gói thầu = field am_* trên Deal.
+        key: 'deal-pipeline',
+        label: 'Pipeline cơ hội (Deal)',
+        icon: '📈',
+        to: '/antmed/deals',
+        enabled: true,
+      },
+      {
         key: 'dispatch',
         label: 'Bảng điều phối',
-        icon: '🎯',
+        icon: '🚦',
         to: '/antmed/sales/dispatch',
         enabled: true,
       },
