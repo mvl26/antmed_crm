@@ -31,6 +31,44 @@ DOCTOR_LIST_FIELDS = ["name", "full_name", "specialty", "hospital", "phone"]
 # Field bác sỹ con trong "mặt 360" của bệnh viện (đúng acceptance get_hospital).
 HOSPITAL_DOCTOR_FIELDS = ["name", "full_name", "specialty", "phone"]
 
+# Select options khớp doctype AntMed Hospital (cho form tạo bệnh viện).
+HOSPITAL_RANK_OPTIONS = ("Đặc biệt", "I", "II", "III", "Khác")
+HOSPITAL_CONTRACT_STATUS_OPTIONS = ("Đã ký", "Tiềm năng", "Hết hạn")
+
+
+@frappe.whitelist(methods=["POST"])
+def create_hospital(
+	hospital_name: str,
+	hospital_code: str,
+	rank: str | None = None,
+	contract_status: str | None = None,
+	tax_code: str | None = None,
+	address: str | None = None,
+) -> dict:
+	"""Tạo bệnh viện (AntMed Hospital). hospital_code + hospital_name bắt buộc; còn lại optional.
+
+	Gate quyền create theo DocPerm (System Manager / Quản lý / NV kinh doanh).
+	"""
+	if not frappe.has_permission(HOSPITAL_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền tạo bệnh viện."), frappe.PermissionError)
+	if not (hospital_name or "").strip():
+		frappe.throw(_("Tên bệnh viện bắt buộc."))
+	if not (hospital_code or "").strip():
+		frappe.throw(_("Mã bệnh viện bắt buộc."))
+	doc = frappe.get_doc(
+		{
+			"doctype": HOSPITAL_DOCTYPE,
+			"hospital_code": hospital_code.strip(),
+			"hospital_name": hospital_name.strip(),
+			"rank": rank or None,
+			"contract_status": contract_status or None,
+			"tax_code": tax_code,
+			"address": address,
+		}
+	)
+	doc.insert()
+	return {"name": doc.name, "hospital_name": doc.hospital_name}
+
 
 def _coerce_filters(filters: dict | str | None) -> list:
 	"""Chuẩn hoá filters về list điều kiện. FE/GET truyền dict hoặc JSON-string."""
