@@ -411,3 +411,104 @@ def tender_catalog(hospital: str) -> dict:
 		"contract": names[0],
 		"items": items,
 	}
+
+
+# ── M09 — Portal BV "Gọi vật tư cho ca mổ" (mockup G1) ──────────────────────────
+MATERIAL_REQUEST_DOCTYPE = "AntMed Material Request"
+ITEM_DOCTYPE = "AntMed Item"
+MR_LIST_FIELDS = ["name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "needs_approval", "creation"]
+MR_LIST_ITEM_KEYS = ("name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "needs_approval", "creation")
+MR_DETAIL_FIELDS = ("name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "surgery_room", "assigned_employee", "needs_approval", "delivery_ref", "notes", "docstatus")
+MR_ITEM_KEYS = ("item", "item_name", "requested_qty", "in_quota", "note")
+
+
+@frappe.whitelist(methods=["POST"])
+def create_material_request(
+	hospital: str,
+	items,
+	doctor: str | None = None,
+	surgery_datetime: str | None = None,
+	surgery_room: str | None = None,
+	urgency: str = "Bình thường",
+	notes: str | None = None,
+) -> dict:
+	"""BV gửi yêu cầu vật tư cho ca mổ (mockup G1). Mỗi dòng đánh dấu in_quota (BR-01: trong
+	danh mục trúng thầu). Item ngoài thầu → needs_approval=1 (NV duyệt). Trả {name, status, needs_approval}.
+	"""
+	if not frappe.has_permission(MATERIAL_REQUEST_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền gửi yêu cầu vật tư."), frappe.PermissionError)
+	rows = frappe.parse_json(items) if isinstance(items, str) else (items or [])
+	if not rows:
+		frappe.throw(_("Yêu cầu phải có ít nhất 1 vật tư."))
+
+	from antmed_crm.antmed import contract_hooks
+
+	needs_approval = False
+	mr_items = []
+	for r in rows:
+		item = r.get("item")
+		in_quota = bool(contract_hooks.find_active_contract_with_item(hospital, item))
+		if not in_quota:
+			needs_approval = True
+		mr_items.append(
+			{
+				"item": item,
+				"item_name": frappe.db.get_value(ITEM_DOCTYPE, item, "item_name"),
+				"requested_qty": r.get("requested_qty") or 0,
+				"in_quota": 1 if in_quota else 0,
+				"note": r.get("note"),
+			}
+		)
+	doc = frappe.get_doc(
+		{
+			"doctype": MATERIAL_REQUEST_DOCTYPE,
+			"hospital": hospital,
+			"doctor": doctor,
+			"surgery_datetime": surgery_datetime,
+			"surgery_room": surgery_room,
+			"urgency": urgency,
+			"status": "Mới",
+			"needs_approval": 1 if needs_approval else 0,
+			"notes": notes,
+			"items": mr_items,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	doc.submit()
+	return {"name": doc.name, "status": doc.status, "needs_approval": bool(needs_approval)}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_material_requests(hospital: str | None = None, status: str | None = None, start: int = 0, page_length: int = 20) -> dict:
+	"""Danh sách yêu cầu vật tư của BV (Portal). Trả RAW {data, total_count} — count==rows dưới DocPerm."""
+	conditions = []
+	if hospital:
+		conditions.append(["hospital", "=", hospital])
+	if status:
+		conditions.append(["status", "=", status])
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	rows = frappe.get_list(
+		MATERIAL_REQUEST_DOCTYPE,
+		filters=conditions,
+		fields=MR_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by=f"`tab{MATERIAL_REQUEST_DOCTYPE}`.creation desc",
+	)
+	data = [{k: r.get(k) for k in MR_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(MATERIAL_REQUEST_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_material_request(name: str) -> dict:
+	"""Chi tiết 1 yêu cầu vật tư + items[]. throw PermissionError nếu không read."""
+	if not frappe.has_permission(MATERIAL_REQUEST_DOCTYPE, "read", doc=name):
+		frappe.throw(_("Bạn không có quyền xem yêu cầu này."), frappe.PermissionError)
+	doc = frappe.get_doc(MATERIAL_REQUEST_DOCTYPE, name).as_dict()
+	result = {k: doc.get(k) for k in MR_DETAIL_FIELDS}
+	result["hospital_name"] = frappe.db.get_value(HOSPITAL_DOCTYPE, doc.get("hospital"), "hospital_name") if doc.get("hospital") else None
+	result["doctor_name"] = frappe.db.get_value(DOCTOR_DOCTYPE, doc.get("doctor"), "full_name") if doc.get("doctor") else None
+	result["items"] = [{k: row.get(k) for k in MR_ITEM_KEYS} for row in (doc.get("items") or [])]
+	return result
