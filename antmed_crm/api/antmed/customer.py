@@ -416,6 +416,9 @@ def tender_catalog(hospital: str) -> dict:
 # ── M09 — Portal BV "Gọi vật tư cho ca mổ" (mockup G1) ──────────────────────────
 MATERIAL_REQUEST_DOCTYPE = "AntMed Material Request"
 ITEM_DOCTYPE = "AntMed Item"
+DELIVERY_DOCTYPE = "AntMed Delivery"
+DOCUMENT_DOCTYPE = "AntMed Document"
+PORTAL_HISTORY_STATES = ("Đã gán NV", "Đang giao", "Đã bàn giao", "Đã đóng")
 MR_LIST_FIELDS = ["name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "needs_approval", "creation"]
 MR_LIST_ITEM_KEYS = ("name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "needs_approval", "creation")
 MR_DETAIL_FIELDS = ("name", "hospital", "doctor", "status", "urgency", "surgery_datetime", "surgery_room", "assigned_employee", "needs_approval", "delivery_ref", "notes", "docstatus")
@@ -512,3 +515,84 @@ def get_material_request(name: str) -> dict:
 	result["doctor_name"] = frappe.db.get_value(DOCTOR_DOCTYPE, doc.get("doctor"), "full_name") if doc.get("doctor") else None
 	result["items"] = [{k: row.get(k) for k in MR_ITEM_KEYS} for row in (doc.get("items") or [])]
 	return result
+
+
+@frappe.whitelist(methods=["POST"])
+def receive_material_request(name: str) -> dict:
+	"""NV tiếp nhận yêu cầu vật tư → 'NV đã nhận' + gán mình. Gate write."""
+	if not frappe.has_permission(MATERIAL_REQUEST_DOCTYPE, "write", doc=name):
+		frappe.throw(_("Bạn không có quyền tiếp nhận yêu cầu này."), frappe.PermissionError)
+	frappe.db.set_value(MATERIAL_REQUEST_DOCTYPE, name, {"status": "NV đã nhận", "assigned_employee": frappe.session.user})
+	return {"name": name, "status": "NV đã nhận"}
+
+
+@frappe.whitelist(methods=["POST"])
+def convert_to_delivery(name: str) -> dict:
+	"""NV tạo phiếu giao (AntMed Delivery) từ yêu cầu Portal → 'Đã tạo phiếu giao' + delivery_ref.
+
+	Idempotent: đã có delivery_ref → trả lại phiếu cũ (KHÔNG tạo trùng). Nối M09 Portal → M04.
+	"""
+	if not frappe.has_permission(MATERIAL_REQUEST_DOCTYPE, "write", doc=name):
+		frappe.throw(_("Bạn không có quyền xử lý yêu cầu này."), frappe.PermissionError)
+	mr = frappe.get_doc(MATERIAL_REQUEST_DOCTYPE, name)
+	if mr.delivery_ref:
+		return {"name": name, "delivery": mr.delivery_ref, "status": mr.status}
+	dlv = frappe.get_doc(
+		{
+			"doctype": DELIVERY_DOCTYPE,
+			"hospital": mr.hospital,
+			"doctor": mr.doctor,
+			"surgery_datetime": mr.surgery_datetime,
+			"surgery_room": mr.surgery_room,
+			# NV chuyển yêu cầu = người được gán → phiếu vào thẳng 'Đã gán NV'.
+			"status": "Đã gán NV",
+			"assigned_employee": mr.assigned_employee or frappe.session.user,
+			"items": [{"item": it.item, "item_name": it.item_name, "requested_qty": it.requested_qty} for it in mr.items],
+		}
+	)
+	dlv.insert(ignore_permissions=True)
+	frappe.db.set_value(MATERIAL_REQUEST_DOCTYPE, name, {"status": "Đã tạo phiếu giao", "delivery_ref": dlv.name})
+	return {"name": name, "delivery": dlv.name, "status": "Đã tạo phiếu giao"}
+
+
+@frappe.whitelist(methods=["GET"])
+def portal_history(hospital: str, start: int = 0, page_length: int = 20) -> dict:
+	"""Lịch sử giao & chứng từ của BV (mockup G2). Trả RAW {data, total_count} — count==rows.
+
+	Mỗi dòng: delivery, doctor_name, date, status, sku_count, has_documents (có bundle M06),
+	payment_status (placeholder 'Chờ TT' — AR thật ở M-finance). Đọc dưới DocPerm.
+	"""
+	conditions = [["hospital", "=", hospital], ["status", "in", list(PORTAL_HISTORY_STATES)]]
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	deliveries = frappe.get_list(
+		DELIVERY_DOCTYPE,
+		filters=conditions,
+		fields=["name", "doctor", "surgery_datetime", "delivered_at", "status"],
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by=f"`tab{DELIVERY_DOCTYPE}`.surgery_datetime desc",
+	)
+	names = [d["name"] for d in deliveries]
+	sku_by_parent: dict = {}
+	doc_parents: set = set()
+	if names:
+		for it in frappe.get_all("AntMed Delivery Item", filters={"parent": ["in", names]}, fields=["parent"], limit_page_length=0):
+			sku_by_parent[it["parent"]] = sku_by_parent.get(it["parent"], 0) + 1
+		for d in frappe.get_all(DOCUMENT_DOCTYPE, filters={"delivery": ["in", names]}, fields=["delivery"], limit_page_length=0):
+			doc_parents.add(d["delivery"])
+	data = [
+		{
+			"delivery": d["name"],
+			"doctor": d.get("doctor"),
+			"doctor_name": frappe.db.get_value(DOCTOR_DOCTYPE, d.get("doctor"), "full_name") if d.get("doctor") else None,
+			"date": str(d.get("delivered_at") or d.get("surgery_datetime") or ""),
+			"status": d.get("status"),
+			"sku_count": sku_by_parent.get(d["name"], 0),
+			"has_documents": d["name"] in doc_parents,
+			"payment_status": "Chờ TT",
+		}
+		for d in deliveries
+	]
+	total_count = len(frappe.get_list(DELIVERY_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
