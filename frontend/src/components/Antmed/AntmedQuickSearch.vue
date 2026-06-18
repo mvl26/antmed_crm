@@ -26,7 +26,7 @@
             v-model="query"
             type="text"
             role="combobox"
-            aria-expanded="true"
+            :aria-expanded="flatItems.length > 0"
             aria-controls="quicksearch-list"
             :aria-activedescendant="activeId"
             class="w-full border-0 bg-transparent text-base text-ink-gray-9 placeholder:text-ink-gray-4 focus:outline-none focus:ring-0"
@@ -123,7 +123,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { FeatherIcon } from 'frappe-ui'
 import { searchFunctions, normalize } from '@/data/antmedSearchSources'
@@ -193,6 +193,10 @@ watch(query, (q) => {
   debounceTimer = setTimeout(() => {
     records.submit({ query: q, limit: 5 })
   }, 250)
+})
+
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
 })
 
 // ── Bàn phím ──
