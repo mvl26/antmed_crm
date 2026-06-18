@@ -17,6 +17,11 @@ QUEUE_DOCTYPE = "AntMed Document Release Queue"
 DELIVERY_DOCTYPE = "AntMed Delivery"
 CERTIFICATE_DOCTYPE = "AntMed Certificate"
 LOT_DOCTYPE = "AntMed Lot"
+EINVOICE_DOCTYPE = "AntMed E-Invoice"
+PROVIDER_DOCTYPE = "AntMed E-Invoice Provider"
+
+EINVOICE_LIST_FIELDS = ["name", "delivery", "provider", "status", "ma_cqt", "signed_at"]
+EINVOICE_LIST_ITEM_KEYS = ("name", "delivery", "provider", "status", "ma_cqt", "signed_at")
 
 CERT_LIST_FIELDS = ["name", "cert_no", "cert_type", "item", "lot", "issued_date", "expires_at"]
 CERT_LIST_ITEM_KEYS = ("name", "cert_no", "cert_type", "item", "lot", "issued_date", "expires_at")
@@ -193,3 +198,73 @@ def check_release(delivery: str) -> dict:
 	"""Kiểm tra điều kiện phát hành (BR-03, KHÔNG throw): {can_release, missing, status}."""
 	_lines, missing = _build_lines(delivery)
 	return {"can_release": not missing, "missing": missing, "status": _status_for(missing)}
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_einvoice(delivery: str) -> dict:
+	"""Phát hành HĐĐT cho 1 phiếu giao (STUB dev-mode — KHÔNG gọi provider thật).
+
+	Gate BR-03 (assert_cocq_complete) TRƯỚC khi phát hành. Idempotent: 1 HĐĐT/phiếu giao.
+	Stub: tạo + submit (BR-04 immutable) với mã CQT giả 'STUB-CQT-…'. Provider thật = M13/ROADMAP.
+	"""
+	if not frappe.has_permission(EINVOICE_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền phát hành hóa đơn điện tử."), frappe.PermissionError)
+	existing = frappe.db.get_value(EINVOICE_DOCTYPE, {"delivery": delivery}, "name")
+	if existing:
+		return {"einvoice": existing, "status": frappe.db.get_value(EINVOICE_DOCTYPE, existing, "status"), "stub": True}
+
+	assert_cocq_complete(delivery)  # BR-03 hard gate
+
+	from frappe.utils import now_datetime
+
+	bundle = frappe.db.get_value(DOCUMENT_DOCTYPE, {"delivery": delivery}, "name")
+	provider = frappe.db.get_single_value(PROVIDER_DOCTYPE, "default_provider") or "Viettel"
+	ev = frappe.get_doc(
+		{"doctype": EINVOICE_DOCTYPE, "delivery": delivery, "document_bundle": bundle, "provider": provider, "status": "Chờ ký"}
+	)
+	ev.insert(ignore_permissions=True)
+	# STUB ký + phát hành (dev-mode): KHÔNG network thật, mã CQT giả.
+	ev.status = "Đã phát hành"
+	ev.ma_cqt = f"STUB-CQT-{ev.name}"
+	ev.signed_at = now_datetime()
+	ev.submit()  # BR-04: bất biến sau submit
+	if bundle:
+		frappe.db.set_value(DOCUMENT_DOCTYPE, bundle, "status", "Đã phát hành")
+		if frappe.db.exists(QUEUE_DOCTYPE, delivery):
+			frappe.db.set_value(QUEUE_DOCTYPE, delivery, "status", "Đã phát hành")
+	return {"einvoice": ev.name, "status": ev.status, "ma_cqt": ev.ma_cqt, "stub": True}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_einvoices(status: str | None = None, start: int = 0, page_length: int = 20) -> dict:
+	"""Danh sách HĐĐT. Trả RAW {data, total_count} — count==rows dưới DocPerm."""
+	conditions = []
+	if status:
+		conditions.append(["status", "=", status])
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	rows = frappe.get_list(
+		EINVOICE_DOCTYPE,
+		filters=conditions,
+		fields=EINVOICE_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by="modified desc",
+	)
+	data = [{k: r.get(k) for k in EINVOICE_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(EINVOICE_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_provider_settings() -> dict:
+	"""Cấu hình HĐĐT — CHỈ trả 'configured' bool/endpoint, TUYỆT ĐỐI KHÔNG trả api_key (BR-INT-01)."""
+	if not frappe.has_permission(PROVIDER_DOCTYPE, "read"):
+		frappe.throw(_("Bạn không có quyền xem cấu hình HĐĐT."), frappe.PermissionError)
+	s = frappe.get_doc(PROVIDER_DOCTYPE)
+	out = {"default_provider": s.default_provider}
+	for prov in ("viettel", "misa", "vnpt"):
+		out[f"{prov}_endpoint"] = s.get(f"{prov}_endpoint")
+		# CHỈ bool — api_key (Password) KHÔNG bao giờ đưa vào response (BR-INT-01).
+		out[f"{prov}_configured"] = bool(s.get_password(f"{prov}_api_key", raise_exception=False))
+	return out
