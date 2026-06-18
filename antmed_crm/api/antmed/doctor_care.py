@@ -13,6 +13,10 @@ from frappe.utils import now_datetime
 VISIT_DOCTYPE = "AntMed Doctor Visit"
 NOTE_DOCTYPE = "AntMed Care Note"
 DOCTOR_DOCTYPE = "AntMed Doctor"
+GIFT_DOCTYPE = "AntMed Doctor Gift"
+
+GIFT_LIST_FIELDS = ["name", "doctor", "gift_date", "item_or_text", "value_vnd", "approved_by"]
+GIFT_LIST_ITEM_KEYS = ("name", "doctor", "gift_date", "item_or_text", "value_vnd", "approved_by")
 
 VISIT_LIST_FIELDS = ["name", "doctor", "doctor.full_name as doctor_name", "hospital", "sales_rep", "status", "checked_in_at"]
 VISIT_LIST_ITEM_KEYS = ("name", "doctor", "doctor_name", "hospital", "sales_rep", "status", "checked_in_at")
@@ -142,4 +146,51 @@ def list_care_notes(doctor: str | None = None, start: int = 0, page_length: int 
 	)
 	data = [{k: r.get(k) for k in NOTE_LIST_ITEM_KEYS} for r in rows]
 	total_count = len(frappe.get_list(NOTE_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
+	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_gift(
+	doctor: str,
+	item_or_text: str,
+	value_vnd: float | None = None,
+	purpose: str | None = None,
+	approved_by: str | None = None,
+) -> dict:
+	"""Ghi nhận quà tặng bác sỹ. BR-11 (approved_by bắt buộc) enforce ở controller validate."""
+	if not frappe.has_permission(GIFT_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền ghi quà tặng."), frappe.PermissionError)
+	doc = frappe.get_doc(
+		{
+			"doctype": GIFT_DOCTYPE,
+			"doctor": doctor,
+			"item_or_text": item_or_text,
+			"value_vnd": value_vnd,
+			"purpose": purpose,
+			"approved_by": approved_by,
+			"gift_date": now_datetime().date(),
+		}
+	)
+	doc.insert(ignore_permissions=True)  # validate BR-11 vẫn chạy
+	return {"gift": doc.name, "approved_by": approved_by}
+
+
+@frappe.whitelist(methods=["GET"])
+def list_gifts(doctor: str | None = None, start: int = 0, page_length: int = 20) -> dict:
+	"""Danh sách quà tặng (review compliance). count==rows dưới DocPerm."""
+	conditions = []
+	if doctor:
+		conditions.append(["doctor", "=", doctor])
+	start = max(0, int(start))
+	page_length = max(0, int(page_length))
+	rows = frappe.get_list(
+		GIFT_DOCTYPE,
+		filters=conditions,
+		fields=GIFT_LIST_FIELDS,
+		limit_start=start,
+		limit_page_length=page_length or 0,
+		order_by="gift_date desc",
+	)
+	data = [{k: r.get(k) for k in GIFT_LIST_ITEM_KEYS} for r in rows]
+	total_count = len(frappe.get_list(GIFT_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
 	return {"data": data, "total_count": total_count}
