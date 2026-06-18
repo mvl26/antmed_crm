@@ -23,7 +23,10 @@ describe('antmed.js — doctor_care + call factories', () => {
   for (const [fn, endpoint, method] of FACTORIES) {
     it(`${fn} → ${endpoint} (${method})`, () => {
       expect(src).toContain(`export function ${fn}`)
-      expect(src).toContain(`antmed_crm.api.antmed.doctor_care.${endpoint}`)
+      const at = src.indexOf(`export function ${fn}`)
+      const block = src.slice(at, at + 400)
+      expect(block).toContain(`antmed_crm.api.antmed.doctor_care.${endpoint}`)
+      expect(block).toContain(`method: '${method}'`)
     })
   }
   it('không dùng prefix crm.api.* (legacy) cho doctor_care', () => {
