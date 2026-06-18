@@ -216,6 +216,7 @@
       </main>
     </div>
 
+    <!-- Command palette overlay (⌘/Ctrl+K) -->
     <AntmedQuickSearch v-model:open="searchOpen" />
   </div>
 </template>

@@ -20,5 +20,6 @@ describe('AntmedLayout — wire quick-search palette', () => {
   it('hotkey ⌘/Ctrl+K mở palette', () => {
     expect(layoutSrc).toMatch(/metaKey \|\| .*ctrlKey/)
     expect(layoutSrc).toContain("addEventListener('keydown'")
+    expect(layoutSrc).toContain("removeEventListener('keydown'")
   })
 })
