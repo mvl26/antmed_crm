@@ -208,6 +208,8 @@ scheduler_events = {
 		"antmed_crm.api.event.trigger_daily_event_notifications",
 		"antmed_crm.fcrm.doctype.crm_view_settings.crm_view_settings.clear_old_versions",
 		"antmed_crm.api.antmed.instrument_loan.check_overdue_loans",
+		"antmed_crm.api.antmed.doctor_care.send_call_plan_today",
+		"antmed_crm.api.antmed.doctor_care.notify_doctor_birthdays",
 	],
 	"weekly": ["antmed_crm.api.event.trigger_weekly_event_notifications"],
 	"daily_long": ["antmed_crm.lead_syncing.background_sync.sync_leads_from_sources_daily"],

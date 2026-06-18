@@ -8,12 +8,14 @@
 
 import frappe
 from frappe import _
-from frappe.utils import now_datetime
+from frappe.utils import getdate, now_datetime, nowdate
 
 VISIT_DOCTYPE = "AntMed Doctor Visit"
 NOTE_DOCTYPE = "AntMed Care Note"
 DOCTOR_DOCTYPE = "AntMed Doctor"
 GIFT_DOCTYPE = "AntMed Doctor Gift"
+SURVEY_DOCTYPE = "AntMed Satisfaction Survey"
+CALL_PLAN_DOCTYPE = "AntMed Call Plan"
 
 GIFT_LIST_FIELDS = ["name", "doctor", "gift_date", "item_or_text", "value_vnd", "approved_by"]
 GIFT_LIST_ITEM_KEYS = ("name", "doctor", "gift_date", "item_or_text", "value_vnd", "approved_by")
@@ -194,3 +196,63 @@ def list_gifts(doctor: str | None = None, start: int = 0, page_length: int = 20)
 	data = [{k: r.get(k) for k in GIFT_LIST_ITEM_KEYS} for r in rows]
 	total_count = len(frappe.get_list(GIFT_DOCTYPE, filters=conditions, pluck="name", limit_page_length=0))
 	return {"data": data, "total_count": total_count}
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_survey(doctor: str, score_1_5: int, comments: str | None = None, delivery: str | None = None, instrument_loan: str | None = None) -> dict:
+	"""Ghi khảo sát hài lòng bác sỹ (điểm 1-5)."""
+	if not frappe.has_permission(SURVEY_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền ghi khảo sát."), frappe.PermissionError)
+	doc = frappe.get_doc(
+		{
+			"doctype": SURVEY_DOCTYPE,
+			"doctor": doctor,
+			"score_1_5": int(score_1_5),
+			"comments": comments,
+			"delivery": delivery,
+			"instrument_loan": instrument_loan,
+			"responded_at": now_datetime(),
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	return {"survey": doc.name, "doctor": doctor}
+
+
+def send_call_plan_today() -> dict:
+	"""Scheduler (daily): Call Plan tới hạn thăm (next_visit <= hôm nay) → realtime nhắc NV.
+
+	Trả {count, due:[{name, doctor, sales_rep}]}.
+	"""
+	due = frappe.get_all(
+		CALL_PLAN_DOCTYPE,
+		filters={"next_visit": ["<=", nowdate()]},
+		fields=["name", "doctor", "sales_rep"],
+		limit_page_length=0,
+	)
+	for p in due:
+		try:
+			frappe.publish_realtime("antmed_call_plan_due", {"call_plan": p["name"], "doctor": p["doctor"]}, user=p.get("sales_rep"))
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "M07 send_call_plan_today")
+	return {"count": len(due), "due": due}
+
+
+def notify_doctor_birthdays(within_days: int = 7) -> dict:
+	"""Scheduler (daily): bác sỹ có sinh nhật trong `within_days` ngày tới (bỏ qua năm) → nhắc.
+
+	Trả {count, upcoming:[{doctor, full_name, days_to_birthday}]}.
+	"""
+	today = getdate(nowdate())
+	upcoming = []
+	for d in frappe.get_all(DOCTOR_DOCTYPE, filters=[["birthday", "is", "set"]], fields=["name", "full_name", "birthday"], limit_page_length=0):
+		bd = getdate(d["birthday"])
+		try:
+			this_year = bd.replace(year=today.year)
+		except ValueError:  # 29/02
+			continue
+		if this_year < today:
+			this_year = this_year.replace(year=today.year + 1)
+		days = (this_year - today).days
+		if 0 <= days <= int(within_days):
+			upcoming.append({"doctor": d["name"], "full_name": d["full_name"], "days_to_birthday": days})
+	return {"count": len(upcoming), "upcoming": upcoming}
