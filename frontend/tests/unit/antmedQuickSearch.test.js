@@ -36,4 +36,10 @@ describe('AntmedQuickSearch.vue — command palette', () => {
     expect(compSrc).toContain('router.push')
     expect(compSrc).toContain("emit('update:open'")
   })
+  it('có nhóm Bộ dụng cụ + Giao phòng mổ (instrument_sets/deliveries)', () => {
+    expect(compSrc).toContain('instrument_sets')
+    expect(compSrc).toContain('deliveries')
+    expect(compSrc).toContain('/antmed/instruments/')
+    expect(compSrc).toContain('/antmed/deliveries/')
+  })
 })
