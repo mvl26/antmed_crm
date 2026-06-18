@@ -242,15 +242,36 @@ def list_leads(
 	return {"data": data, "total_count": total_count}
 
 
+@frappe.whitelist(methods=["GET"])
+def lead_form_options() -> dict:
+	"""Option cho form tạo Lead: nguồn (CRM Lead Source) + khu vực (CRM Territory).
+
+	Trả {sources: [name], territories: [name]} — FE đổ dropdown. Rỗng → dropdown chỉ có "(trống)".
+	"""
+	return {
+		"sources": frappe.get_all("CRM Lead Source", pluck="name", order_by="name asc"),
+		"territories": frappe.get_all("CRM Territory", pluck="name", order_by="name asc"),
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def create_lead(
 	lead_name: str,
 	organization: str | None = None,
 	mobile_no: str | None = None,
+	phone: str | None = None,
 	email: str | None = None,
+	website: str | None = None,
+	job_title: str | None = None,
+	source: str | None = None,
+	territory: str | None = None,
 	status: str | None = None,
 ) -> dict:
-	"""Tạo CRM Lead mới (kế thừa doctype Frappe CRM). lead_owner mặc định = user phiên."""
+	"""Tạo CRM Lead mới (kế thừa doctype Frappe CRM). lead_owner mặc định = user phiên.
+
+	Field bổ sung (đều optional, khớp doctype CRM Lead): phone (cố định), website, job_title
+	(chức danh người liên hệ), source (Link CRM Lead Source), territory (Link CRM Territory).
+	"""
 	if not frappe.has_permission(LEAD_DOCTYPE, "create"):
 		frappe.throw(_("Bạn không có quyền tạo lead."), frappe.PermissionError)
 	if not (lead_name or "").strip():
@@ -261,7 +282,12 @@ def create_lead(
 			"first_name": lead_name.strip(),
 			"organization": organization,
 			"mobile_no": mobile_no,
+			"phone": phone,
 			"email_id": email,
+			"website": website,
+			"job_title": job_title,
+			"source": source or None,
+			"territory": territory or None,
 			"status": status or "New",
 			"lead_owner": frappe.session.user,
 		}
@@ -333,3 +359,144 @@ def lead_funnel() -> dict:
 		count = len(frappe.get_list(TENDER_DOCTYPE, filters={"status": status}, pluck="name", limit_page_length=0))
 		stages.append({"key": key, "label": status, "count": count})
 	return {"stages": stages}
+
+
+# ── M08 (GỘP): Pipeline CƠ HỘI = CRM Deal (kế thừa Frappe CRM) ───────────────
+# Pipeline chính = CRM Deal; gói thầu VTYT = custom field am_* trên Deal (deal_setup.py).
+
+DEAL_DOCTYPE = "CRM Deal"
+DEAL_STATUS_DOCTYPE = "CRM Deal Status"
+DEAL_CARD_FIELDS = [
+	"name", "organization", "deal_value", "status", "deal_owner", "probability",
+	"territory", "expected_closure_date", "am_hospital", "am_tender_no", "am_decision_no",
+]
+DEAL_DETAIL_FIELDS = (
+	"name", "organization", "deal_value", "currency", "status", "deal_owner", "probability",
+	"territory", "expected_closure_date", "lead_name", "am_hospital", "am_tender_no", "am_decision_no",
+)
+
+
+def _deal_stage_rows():
+	return frappe.get_all(DEAL_STATUS_DOCTYPE, fields=["name", "type", "position"], order_by="position asc")
+
+
+@frappe.whitelist(methods=["GET"])
+def deal_stages() -> dict:
+	"""Giai đoạn pipeline = CRM Deal Status (order theo position)."""
+	return {"stages": _deal_stage_rows()}
+
+
+@frappe.whitelist(methods=["GET"])
+def deal_board() -> dict:
+	"""Kanban Cơ hội (CRM Deal) — group theo CRM Deal Status + forecast (weighted prob).
+
+	get_list → tôn trọng org_hierarchy (BR-13). Enrich tên NV + BV (am_hospital).
+	Trả {stages:[{name,type}], by_stage:{status:[cards]}, forecast:{total_weighted, by_stage}}.
+	"""
+	stages = _deal_stage_rows()
+	deals = frappe.get_list(DEAL_DOCTYPE, fields=DEAL_CARD_FIELDS, limit_page_length=0, order_by="modified desc")
+
+	owners = list({d.deal_owner for d in deals if d.deal_owner})
+	omap = (
+		{u.name: u.full_name for u in frappe.get_all("User", filters={"name": ["in", owners]}, fields=["name", "full_name"])}
+		if owners else {}
+	)
+	hosps = list({d.am_hospital for d in deals if d.get("am_hospital")})
+	hmap = (
+		{h.name: h.hospital_name for h in frappe.get_all("AntMed Hospital", filters={"name": ["in", hosps]}, fields=["name", "hospital_name"])}
+		if hosps else {}
+	)
+
+	by_stage = {s.name: [] for s in stages}
+	weighted = {s.name: 0.0 for s in stages}
+	total = 0.0
+	for d in deals:
+		w = float(d.deal_value or 0) * float(d.probability or 0) / 100.0
+		total += w
+		if d.status in by_stage:
+			by_stage[d.status].append(
+				{
+					"name": d.name,
+					"organization": d.organization,
+					"deal_value": d.deal_value,
+					"status": d.status,
+					"deal_owner": d.deal_owner,
+					"deal_owner_name": omap.get(d.deal_owner) or d.deal_owner,
+					"probability": d.probability,
+					"territory": d.territory,
+					"am_hospital": d.get("am_hospital"),
+					"am_hospital_name": hmap.get(d.get("am_hospital")),
+					"am_tender_no": d.get("am_tender_no"),
+				}
+			)
+			weighted[d.status] += w
+	return {
+		"stages": [{"name": s.name, "type": s.type} for s in stages],
+		"by_stage": by_stage,
+		"forecast": {
+			"total_weighted": round(total, 2),
+			"by_stage": [{"stage": s.name, "weighted": round(weighted[s.name], 2)} for s in stages],
+		},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def move_deal(deal: str, status: str) -> dict:
+	"""Kéo-thả: đổi giai đoạn CRM Deal (2 chiều). Won→prob 100, Lost→0 (đồng bộ)."""
+	if not frappe.has_permission(DEAL_DOCTYPE, "write", doc=deal):
+		frappe.throw(_("Bạn không có quyền cập nhật cơ hội này."), frappe.PermissionError)
+	if not frappe.db.exists(DEAL_STATUS_DOCTYPE, status):
+		frappe.throw(_("Giai đoạn '{0}' không hợp lệ.").format(status))
+	stype = frappe.db.get_value(DEAL_STATUS_DOCTYPE, status, "type")
+	vals = {"status": status}
+	if stype == "Won":
+		vals["probability"] = 100
+	elif stype == "Lost":
+		vals["probability"] = 0
+	frappe.db.set_value(DEAL_DOCTYPE, deal, vals)
+	return {"name": deal, "status": status}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_deal(deal: str) -> dict:
+	"""Chi tiết 1 Cơ hội (CRM Deal) + tên NV/BV. throw PermissionError nếu không read."""
+	if not frappe.has_permission(DEAL_DOCTYPE, "read", doc=deal):
+		frappe.throw(_("Bạn không có quyền xem cơ hội này."), frappe.PermissionError)
+	d = frappe.get_doc(DEAL_DOCTYPE, deal).as_dict()
+	result = {k: d.get(k) for k in DEAL_DETAIL_FIELDS}
+	result["deal_owner_name"] = (
+		frappe.db.get_value("User", d.get("deal_owner"), "full_name") if d.get("deal_owner") else None
+	)
+	result["am_hospital_name"] = (
+		frappe.db.get_value("AntMed Hospital", d.get("am_hospital"), "hospital_name") if d.get("am_hospital") else None
+	)
+	return result
+
+
+@frappe.whitelist(methods=["POST"])
+def create_deal(
+	organization: str | None = None,
+	deal_value: float | None = None,
+	status: str | None = None,
+	am_hospital: str | None = None,
+	am_tender_no: str | None = None,
+) -> dict:
+	"""Tạo Cơ hội (CRM Deal) mới. status mặc định = giai đoạn đầu; deal_owner = user phiên."""
+	if not frappe.has_permission(DEAL_DOCTYPE, "create"):
+		frappe.throw(_("Bạn không có quyền tạo cơ hội."), frappe.PermissionError)
+	if not status:
+		rows = _deal_stage_rows()
+		status = rows[0].name if rows else None
+	doc = frappe.get_doc(
+		{
+			"doctype": DEAL_DOCTYPE,
+			"organization": organization or None,
+			"deal_value": deal_value,
+			"status": status,
+			"am_hospital": am_hospital or None,
+			"am_tender_no": am_tender_no or None,
+			"deal_owner": frappe.session.user,
+		}
+	)
+	doc.insert()
+	return {"name": doc.name, "status": doc.status}
