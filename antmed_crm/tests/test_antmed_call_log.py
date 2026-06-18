@@ -76,6 +76,31 @@ class TestAntMedCallLog(FrappeTestCase):
 		self.assertEqual(row["direction"], "Gọi đi")
 		self.assertEqual(row["name"], newer["call_log"])  # newest start_time first
 
+	def test_list_call_logs_visible_to_scoped_rep(self):
+		# Admin logs a call for the doctor.
+		res = doctor_care.log_call(doctor=self.doctor, outcome="Nghe máy", note="rep-visible")
+		email = "_t-call-rep@example.com"
+		if not frappe.db.exists("User", email):
+			frappe.get_doc({
+				"doctype": "User", "email": email, "first_name": "RepCall",
+				"send_welcome_email": 0, "roles": [{"role": "NV kinh doanh"}],
+			}).insert(ignore_permissions=True)
+		else:
+			u = frappe.get_doc("User", email)
+			if "NV kinh doanh" not in [r.role for r in u.roles]:
+				u.append("roles", {"role": "NV kinh doanh"}); u.save(ignore_permissions=True)
+		if not frappe.db.exists("User Permission", {"user": email, "allow": "AntMed Hospital", "for_value": self.hosp}):
+			frappe.get_doc({
+				"doctype": "User Permission", "user": email,
+				"allow": "AntMed Hospital", "for_value": self.hosp,
+			}).insert(ignore_permissions=True)
+		frappe.set_user(email)
+		try:
+			out = doctor_care.list_call_logs(doctor=self.doctor)
+			self.assertIn(res["call_log"], [r["name"] for r in out["data"]])
+		finally:
+			frappe.set_user("Administrator")
+
 	def test_br13_fail_closed(self):
 		email = "_t-call-noperm@example.com"
 		if not frappe.db.exists("User", email):

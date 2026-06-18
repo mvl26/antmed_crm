@@ -234,7 +234,7 @@
       v-model:open="callModalOpen"
       :doctor="props.name"
       :phone="doctor.data?.phone || ''"
-      @logged="callLogs.reload()"
+      @logged="callLogs.submit({ doctor: props.name })"
     />
   </main>
 </template>
