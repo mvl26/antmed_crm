@@ -71,6 +71,22 @@ class TestAntMedMaterialRequest(FrappeTestCase):
 		self.assertEqual(by_item[self.item_in], 1)
 		self.assertEqual(by_item[self.item_out], 0)
 
+	def test_idor_cross_hospital_blocked(self):
+		"""IDOR: user bị giới hạn BV (User Permission) KHÔNG được gửi yêu cầu cho BV khác."""
+		other = _ensure("AntMed Hospital", "hospital_code", "_T-MR-OTHER", {"hospital_name": "BV Khác MR"})
+		email = "_t_mr_portal@example.com"
+		if not frappe.db.exists("User", email):
+			frappe.get_doc({"doctype": "User", "email": email, "first_name": "Portal MR", "send_welcome_email": 0, "roles": [{"role": "NV kinh doanh"}]}).insert(ignore_permissions=True)
+		if not frappe.db.exists("User Permission", {"user": email, "allow": "AntMed Hospital", "for_value": other}):
+			frappe.get_doc({"doctype": "User Permission", "user": email, "allow": "AntMed Hospital", "for_value": other}).insert(ignore_permissions=True)
+		frappe.set_user(email)
+		try:
+			# user chỉ được phép BV 'other' → gửi cho self.hosp phải bị chặn
+			with self.assertRaises(frappe.PermissionError):
+				customer.create_material_request(hospital=self.hosp, items=[{"item": self.item_in, "requested_qty": 1}])
+		finally:
+			frappe.set_user("Administrator")
+
 	def test_list_and_get(self):
 		name = customer.create_material_request(hospital=self.hosp, items=[{"item": self.item_in, "requested_qty": 3}])["name"]
 		res = customer.list_material_requests(hospital=self.hosp, page_length=0)

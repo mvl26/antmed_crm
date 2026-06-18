@@ -425,6 +425,16 @@ MR_DETAIL_FIELDS = ("name", "hospital", "doctor", "status", "urgency", "surgery_
 MR_ITEM_KEYS = ("item", "item_name", "requested_qty", "in_quota", "note")
 
 
+def _assert_hospital_access(hospital: str) -> None:
+	"""Chống IDOR cross-hospital (BR-13): nếu user bị giới hạn BV (User Permission), `hospital`
+	PHẢI thuộc tập cho phép. User không bị giới hạn (admin/NV phủ toàn bộ) → cho qua.
+	"""
+	perms = frappe.defaults.get_user_permissions() or {}
+	allowed = [p.get("doc") for p in perms.get(HOSPITAL_DOCTYPE, []) if p.get("doc")]
+	if allowed and hospital not in allowed:
+		frappe.throw(_("Bạn không có quyền thao tác cho bệnh viện này."), frappe.PermissionError)
+
+
 @frappe.whitelist(methods=["POST"])
 def create_material_request(
 	hospital: str,
@@ -440,6 +450,10 @@ def create_material_request(
 	"""
 	if not frappe.has_permission(MATERIAL_REQUEST_DOCTYPE, "create"):
 		frappe.throw(_("Bạn không có quyền gửi yêu cầu vật tư."), frappe.PermissionError)
+	# Chống IDOR: chỉ cho gửi yêu cầu cho BV trong phạm vi của user (User Permission, BR-13).
+	_assert_hospital_access(hospital)
+	if doctor and frappe.db.get_value(DOCTOR_DOCTYPE, doctor, "hospital") not in (None, hospital):
+		frappe.throw(_("Bác sỹ không thuộc bệnh viện này."))
 	rows = frappe.parse_json(items) if isinstance(items, str) else (items or [])
 	if not rows:
 		frappe.throw(_("Yêu cầu phải có ít nhất 1 vật tư."))
