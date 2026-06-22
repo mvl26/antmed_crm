@@ -197,13 +197,19 @@ class TestAntMedTeamRoster(FrappeTestCase):
 	def test_sales_pct_bar_theme_alert(self):
 		rows = sales_team.team_roster()["rows"]
 		by = {r["deal_owner"]: r for r in rows}
+		# DB dùng CHUNG (co-tenant + test-class khác commit deal Won) → KHÔNG assert max tuyệt đối=150tr.
+		# Robust: đỉnh roster (bất kỳ ai) phải 100%/green/'' ; u1 theo ĐÚNG công thức sales_pct của BE.
 		max_sales = max((r["month_sales"] for r in rows), default=0)
-		self.assertEqual(max_sales, 150_000_000)  # u1 đỉnh đội
+		self.assertGreaterEqual(max_sales, 150_000_000)  # ít nhất bằng đỉnh cohort test (u1)
 
-		# u1 = đỉnh → 100% → green, alert rỗng.
-		self.assertEqual(by[self.u1]["sales_pct"], 100.0)
-		self.assertEqual(by[self.u1]["bar_theme"], "green")
-		self.assertEqual(by[self.u1]["alert"], "")
+		# Rep đỉnh roster → sales_pct 100 → green, alert rỗng (round(100*max/max,1)=100, bất kể là ai).
+		top = next(r for r in rows if r["month_sales"] == max_sales)
+		self.assertEqual(top["sales_pct"], 100.0)
+		self.assertEqual(top["bar_theme"], "green")
+		self.assertEqual(top["alert"], "")
+
+		# u1 (150tr) theo công thức BE round(100*month_sales/max,1) — KHÔNG giả định u1 là đỉnh tuyệt đối.
+		self.assertEqual(by[self.u1]["sales_pct"], round(100 * 150_000_000 / max_sales, 1))
 
 		# u2 = 40/150 ≈ 26.7% < 50 → danger + alert 'DS thấp'.
 		self.assertEqual(by[self.u2]["bar_theme"], "danger")
