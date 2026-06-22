@@ -99,14 +99,6 @@ describe('M03-S4/S5 data layer — factory url antmed_crm.api.antmed.* + method'
     expect(dataSrc).toMatch(/export function scanLot/)
     expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.scan_lot/)
   })
-  it('fifoSuggest → inventory.fifo_suggest (GET)', () => {
-    expect(dataSrc).toMatch(/export function fifoSuggest/)
-    expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.fifo_suggest/)
-  })
-  it('checkFifo → inventory.check_fifo (GET)', () => {
-    expect(dataSrc).toMatch(/export function checkFifo/)
-    expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.check_fifo/)
-  })
   it('createStockEntry → inventory.create_stock_entry (POST)', () => {
     expect(dataSrc).toMatch(/export function createStockEntry/)
     expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.create_stock_entry/)
@@ -142,20 +134,13 @@ describe('M03-S4/S5 data layer — factory url antmed_crm.api.antmed.* + method'
     expect(dataSrc).toMatch(/export function listStockCounts/)
     expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.list_stock_counts/)
   })
-  it('getStockCount → inventory.get_stock_count (GET)', () => {
-    expect(dataSrc).toMatch(/export function getStockCount/)
-    expect(dataSrc).toMatch(/antmed_crm\.api\.antmed\.inventory\.get_stock_count/)
-  })
   it('mọi factory GET có method:GET tường minh (tránh POST → 403)', () => {
     for (const fn of [
       'scanLot',
-      'fifoSuggest',
-      'checkFifo',
       'listWarehouses',
       'listAssignableEmployees',
       'stockCountSnapshot',
       'listStockCounts',
-      'getStockCount',
     ]) {
       const blk = dataSrc.slice(
         dataSrc.indexOf(`export function ${fn}`),

@@ -6,9 +6,9 @@ import path from 'path'
 //
 // ⚠️ M11 FE Slice 2: AntmedHome.vue ĐÃ rewrite từ health-widget → layout dashboard A1
 // (gọi antmed_crm.api.antmed.dashboard.overview, KHÔNG còn health.ping). Smoke health.ping R1
-// nay test ở: BE crm/tests/test_antmed_bootstrap.py (ping()) + FE data/antmed.js export
-// getAntmedHealth + suite antmedDashboard.test.js. Assertion AntmedHome bên dưới cập nhật
-// theo contract MỚI (overview) — KHÔNG mất coverage health.ping.
+// nay test ở BE crm/tests/test_antmed_bootstrap.py (ping()) + suite antmedDashboard.test.js.
+// (Wrapper FE getAntmedHealth đã gỡ ở vòng dọn dead-code — 0 page import; health.ping vẫn
+// callable + có coverage BE.) Assertion AntmedHome bên dưới theo contract MỚI (overview).
 
 const srcDir = path.resolve(__dirname, '../../src')
 const routerSrc = readFileSync(path.join(srcDir, 'router.js'), 'utf8')
