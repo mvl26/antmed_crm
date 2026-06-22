@@ -202,7 +202,7 @@ describe('AntmedContractHealth.vue — đọc r.data.data + tri-branch + cột A
     // import helper thuần (3 nhánh màu green/orange/red sống ở antmedUi).
     expect(pageSrc).toMatch(/healthBarClass/)
     expect(pageSrc).toMatch(
-      /import[^\n]*expiryLabel[^\n]*from\s*'@\/utils\/antmedUi'/,
+      /import\s*\{[^}]*expiryLabel[^}]*\}\s*from\s*'@\/utils\/antmedUi'/,
     )
   })
 
@@ -215,7 +215,7 @@ describe('AntmedContractHealth.vue — đọc r.data.data + tri-branch + cột A
   it('Hết hạn định dạng dd/MM/yyyy qua canon fmtDate (alias formatDate, gom hết inline)', () => {
     // Vòng 2 CONSOLIDATE: formatDate inline → import canon fmtDate (dd/MM/yyyy) từ antmedUi.
     expect(pageSrc).toMatch(
-      /import[^\n]*fmtDate as formatDate[^\n]*from\s*'@\/utils\/antmedUi'/,
+      /import\s*\{[^}]*fmtDate as formatDate[^}]*\}\s*from\s*'@\/utils\/antmedUi'/,
     )
     expect(pageSrc).toMatch(/formatDate\(row\.valid_to\)/)
     // KHÔNG còn tự định nghĩa formatDate inline trong page.

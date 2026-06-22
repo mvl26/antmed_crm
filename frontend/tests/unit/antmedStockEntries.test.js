@@ -196,7 +196,7 @@ describe('AntmedStockEntries.vue — đọc r.data.data + tri-branch + cột wid
     expect(pageSrc).toMatch(/formatStockTime\(row\.posting_datetime\)/)
     expect(pageSrc).toMatch(/entryTypeChipTheme\(row\.entry_type\)/)
     expect(pageSrc).toMatch(
-      /import[^\n]*formatVnMoney[^\n]*from\s*'@\/utils\/antmedUi'/,
+      /import\s*\{[^}]*formatVnMoney[^}]*\}\s*from\s*'@\/utils\/antmedUi'/,
     )
   })
   it('KHÔNG hardcode mock / KHÔNG createListResource·axios (code, không tính comment)', () => {
