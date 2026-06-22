@@ -15,9 +15,43 @@ from antmed_crm.api.antmed._filters import coerce_filters
 TENDER_DOCTYPE = "AntMed Tender"
 HOSPITAL_DOCTYPE = "AntMed Hospital"
 
-TENDER_LIST_FIELDS = ["name", "tender_no", "tender_name", "hospital", "hospital.hospital_name as hospital_name", "status", "estimated_value", "win_probability_pct"]
-TENDER_LIST_ITEM_KEYS = ("name", "tender_no", "tender_name", "hospital", "hospital_name", "status", "estimated_value", "win_probability_pct")
-TENDER_DETAIL_FIELDS = ("name", "tender_no", "tender_name", "hospital", "status", "source", "bid_open_date", "bid_close_date", "estimated_value", "win_probability_pct", "result", "decision_no", "won_contract", "deal", "docstatus")
+TENDER_LIST_FIELDS = [
+	"name",
+	"tender_no",
+	"tender_name",
+	"hospital",
+	"hospital.hospital_name as hospital_name",
+	"status",
+	"estimated_value",
+	"win_probability_pct",
+]
+TENDER_LIST_ITEM_KEYS = (
+	"name",
+	"tender_no",
+	"tender_name",
+	"hospital",
+	"hospital_name",
+	"status",
+	"estimated_value",
+	"win_probability_pct",
+)
+TENDER_DETAIL_FIELDS = (
+	"name",
+	"tender_no",
+	"tender_name",
+	"hospital",
+	"status",
+	"source",
+	"bid_open_date",
+	"bid_close_date",
+	"estimated_value",
+	"win_probability_pct",
+	"result",
+	"decision_no",
+	"won_contract",
+	"deal",
+	"docstatus",
+)
 
 # Giai đoạn pipeline hợp lệ (state machine nhẹ qua status).
 _STAGES = ("Tiếp cận", "Khảo sát", "Báo giá", "Dự thầu", "Trúng", "Trượt")
@@ -84,7 +118,9 @@ def set_tender_result(name: str, result: str, decision_no: str | None = None) ->
 		frappe.throw(_("BR-M08-02: Gói thầu 'Trúng' phải có số quyết định (decision_no)."))
 	win_pct = 100 if result == "Trúng" else 0
 	frappe.db.set_value(
-		TENDER_DOCTYPE, name, {"status": result, "result": result, "decision_no": decision_no, "win_probability_pct": win_pct}
+		TENDER_DOCTYPE,
+		name,
+		{"status": result, "result": result, "decision_no": decision_no, "win_probability_pct": win_pct},
 	)
 	won_contract = None
 	if result == "Trúng":
@@ -126,14 +162,19 @@ def forecast() -> dict:
 
 	Trả {total_weighted, by_stage:[{stage, weighted}]}. Đọc dưới DocPerm.
 	"""
-	rows = frappe.get_list(TENDER_DOCTYPE, fields=["status", "estimated_value", "win_probability_pct"], limit_page_length=0)
+	rows = frappe.get_list(
+		TENDER_DOCTYPE, fields=["status", "estimated_value", "win_probability_pct"], limit_page_length=0
+	)
 	total = 0.0
 	by_stage: dict = {}
 	for r in rows:
 		w = float(r.get("estimated_value") or 0) * float(r.get("win_probability_pct") or 0) / 100.0
 		total += w
 		by_stage[r.get("status")] = by_stage.get(r.get("status"), 0.0) + w
-	return {"total_weighted": round(total, 2), "by_stage": [{"stage": s, "weighted": round(v, 2)} for s, v in by_stage.items()]}
+	return {
+		"total_weighted": round(total, 2),
+		"by_stage": [{"stage": s, "weighted": round(v, 2)} for s, v in by_stage.items()],
+	}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -169,7 +210,11 @@ def get_tender(name: str) -> dict:
 		frappe.throw(_("Bạn không có quyền xem gói thầu này."), frappe.PermissionError)
 	doc = frappe.get_doc(TENDER_DOCTYPE, name).as_dict()
 	result = {k: doc.get(k) for k in TENDER_DETAIL_FIELDS}
-	result["hospital_name"] = frappe.db.get_value(HOSPITAL_DOCTYPE, doc.get("hospital"), "hospital_name") if doc.get("hospital") else None
+	result["hospital_name"] = (
+		frappe.db.get_value(HOSPITAL_DOCTYPE, doc.get("hospital"), "hospital_name")
+		if doc.get("hospital")
+		else None
+	)
 	return result
 
 
@@ -177,7 +222,15 @@ def get_tender(name: str) -> dict:
 
 LEAD_DOCTYPE = "CRM Lead"
 LEAD_FIELDS = [
-	"name", "lead_name", "organization", "status", "territory", "lead_owner", "mobile_no", "email_id", "annual_revenue",
+	"name",
+	"lead_name",
+	"organization",
+	"status",
+	"territory",
+	"lead_owner",
+	"mobile_no",
+	"email_id",
+	"annual_revenue",
 ]
 
 
@@ -214,7 +267,10 @@ def list_leads(
 	)
 	owners = list({r.lead_owner for r in rows if r.lead_owner})
 	omap = (
-		{u.name: u.full_name for u in frappe.get_all("User", filters={"name": ["in", owners]}, fields=["name", "full_name"])}
+		{
+			u.name: u.full_name
+			for u in frappe.get_all("User", filters={"name": ["in", owners]}, fields=["name", "full_name"])
+		}
 		if owners
 		else {}
 	)
@@ -293,9 +349,25 @@ def create_lead(
 
 
 # ── M08-S3: Lead pipeline (chi tiết + qualify→Tender + funnel) ──────────────────
-LEAD_DETAIL_KEYS = ("name", "lead_name", "organization", "status", "territory", "mobile_no", "email_id", "annual_revenue", "lead_owner", "source")
+LEAD_DETAIL_KEYS = (
+	"name",
+	"lead_name",
+	"organization",
+	"status",
+	"territory",
+	"mobile_no",
+	"email_id",
+	"annual_revenue",
+	"lead_owner",
+	"source",
+)
 # Map giai đoạn funnel (mockup): Lead = CRM Lead; còn lại = giai đoạn AntMed Tender.
-_FUNNEL_TENDER_STAGES = (("khao_sat", "Khảo sát"), ("bao_gia", "Báo giá"), ("du_thau", "Dự thầu"), ("trung", "Trúng"))
+_FUNNEL_TENDER_STAGES = (
+	("khao_sat", "Khảo sát"),
+	("bao_gia", "Báo giá"),
+	("du_thau", "Dự thầu"),
+	("trung", "Trúng"),
+)
 
 
 @frappe.whitelist(methods=["GET"])
@@ -306,7 +378,9 @@ def get_lead(name: str) -> dict:
 	doc = frappe.get_doc(LEAD_DOCTYPE, name).as_dict()
 	result = {k: doc.get(k) for k in LEAD_DETAIL_KEYS}
 	result["lead_name"] = doc.get("lead_name") or name
-	result["lead_owner_name"] = frappe.db.get_value("User", doc.get("lead_owner"), "full_name") if doc.get("lead_owner") else None
+	result["lead_owner_name"] = (
+		frappe.db.get_value("User", doc.get("lead_owner"), "full_name") if doc.get("lead_owner") else None
+	)
 	result["tender"] = frappe.db.get_value(TENDER_DOCTYPE, {"source_lead": name}, "name")
 	return result
 
@@ -352,7 +426,9 @@ def lead_funnel() -> dict:
 	lead_count = len(frappe.get_list(LEAD_DOCTYPE, pluck="name", limit_page_length=0))
 	stages = [{"key": "lead", "label": "Lead", "count": lead_count}]
 	for key, status in _FUNNEL_TENDER_STAGES:
-		count = len(frappe.get_list(TENDER_DOCTYPE, filters={"status": status}, pluck="name", limit_page_length=0))
+		count = len(
+			frappe.get_list(TENDER_DOCTYPE, filters={"status": status}, pluck="name", limit_page_length=0)
+		)
 		stages.append({"key": key, "label": status, "count": count})
 	return {"stages": stages}
 
@@ -363,12 +439,32 @@ def lead_funnel() -> dict:
 DEAL_DOCTYPE = "CRM Deal"
 DEAL_STATUS_DOCTYPE = "CRM Deal Status"
 DEAL_CARD_FIELDS = [
-	"name", "organization", "deal_value", "status", "deal_owner", "probability",
-	"territory", "expected_closure_date", "am_hospital", "am_tender_no", "am_decision_no",
+	"name",
+	"organization",
+	"deal_value",
+	"status",
+	"deal_owner",
+	"probability",
+	"territory",
+	"expected_closure_date",
+	"am_hospital",
+	"am_tender_no",
+	"am_decision_no",
 ]
 DEAL_DETAIL_FIELDS = (
-	"name", "organization", "deal_value", "currency", "status", "deal_owner", "probability",
-	"territory", "expected_closure_date", "lead_name", "am_hospital", "am_tender_no", "am_decision_no",
+	"name",
+	"organization",
+	"deal_value",
+	"currency",
+	"status",
+	"deal_owner",
+	"probability",
+	"territory",
+	"expected_closure_date",
+	"lead_name",
+	"am_hospital",
+	"am_tender_no",
+	"am_decision_no",
 )
 
 
@@ -390,17 +486,29 @@ def deal_board() -> dict:
 	Trả {stages:[{name,type}], by_stage:{status:[cards]}, forecast:{total_weighted, by_stage}}.
 	"""
 	stages = _deal_stage_rows()
-	deals = frappe.get_list(DEAL_DOCTYPE, fields=DEAL_CARD_FIELDS, limit_page_length=0, order_by="modified desc")
+	deals = frappe.get_list(
+		DEAL_DOCTYPE, fields=DEAL_CARD_FIELDS, limit_page_length=0, order_by="modified desc"
+	)
 
 	owners = list({d.deal_owner for d in deals if d.deal_owner})
 	omap = (
-		{u.name: u.full_name for u in frappe.get_all("User", filters={"name": ["in", owners]}, fields=["name", "full_name"])}
-		if owners else {}
+		{
+			u.name: u.full_name
+			for u in frappe.get_all("User", filters={"name": ["in", owners]}, fields=["name", "full_name"])
+		}
+		if owners
+		else {}
 	)
 	hosps = list({d.am_hospital for d in deals if d.get("am_hospital")})
 	hmap = (
-		{h.name: h.hospital_name for h in frappe.get_all("AntMed Hospital", filters={"name": ["in", hosps]}, fields=["name", "hospital_name"])}
-		if hosps else {}
+		{
+			h.name: h.hospital_name
+			for h in frappe.get_all(
+				"AntMed Hospital", filters={"name": ["in", hosps]}, fields=["name", "hospital_name"]
+			)
+		}
+		if hosps
+		else {}
 	)
 
 	by_stage = {s.name: [] for s in stages}
@@ -464,7 +572,9 @@ def get_deal(deal: str) -> dict:
 		frappe.db.get_value("User", d.get("deal_owner"), "full_name") if d.get("deal_owner") else None
 	)
 	result["am_hospital_name"] = (
-		frappe.db.get_value("AntMed Hospital", d.get("am_hospital"), "hospital_name") if d.get("am_hospital") else None
+		frappe.db.get_value("AntMed Hospital", d.get("am_hospital"), "hospital_name")
+		if d.get("am_hospital")
+		else None
 	)
 	return result
 

@@ -142,12 +142,8 @@ def get_contract(name: str) -> dict:
 	}
 	# LL-BE-2 + LL-BE-5: enrich *_name, null-guard FK orphan.
 	if doc.get("hospital"):
-		result["hospital_name"] = frappe.db.get_value(
-			HOSPITAL_DOCTYPE, doc.get("hospital"), "hospital_name"
-		)
-	result["items"] = [
-		{k: row.get(k) for k in QUOTA_ROW_FIELDS} for row in (doc.get("items") or [])
-	]
+		result["hospital_name"] = frappe.db.get_value(HOSPITAL_DOCTYPE, doc.get("hospital"), "hospital_name")
+	result["items"] = [{k: row.get(k) for k in QUOTA_ROW_FIELDS} for row in (doc.get("items") or [])]
 	return result
 
 
@@ -618,8 +614,7 @@ def _empty_revenue_mix() -> dict:
 	"""Fail-closed / scope rỗng: 4 dòng A–D revenue=0/pct=0, total_revenue=0 (KHÔNG raise, KHÔNG leak)."""
 	return {
 		"data": [
-			{"classification": cls, "label": cls, "revenue": 0.0, "pct": 0.0}
-			for cls in REVENUE_MIX_CLASSES
+			{"classification": cls, "label": cls, "revenue": 0.0, "pct": 0.0} for cls in REVENUE_MIX_CLASSES
 		],
 		"total_revenue": 0,
 	}
@@ -763,8 +758,7 @@ def _empty_revenue_by_group() -> dict:
 	"""
 	today = getdate(nowdate())
 	months = [
-		_month_short_label(add_months(today, offset))
-		for offset in range(-(REVENUE_BY_GROUP_MONTHS - 1), 1)
+		_month_short_label(add_months(today, offset)) for offset in range(-(REVENUE_BY_GROUP_MONTHS - 1), 1)
 	]
 	groups = [
 		{
@@ -911,9 +905,7 @@ def revenue_by_group() -> dict:
 		monthly = [float(v) for v in monthly_by_group[cls]]
 		total = float(sum(monthly))
 		grand_total += total
-		groups.append(
-			{"classification": cls, "label": cls, "monthly": monthly, "total": total}
-		)
+		groups.append({"classification": cls, "label": cls, "monthly": monthly, "total": total})
 
 	return {
 		"months": months,

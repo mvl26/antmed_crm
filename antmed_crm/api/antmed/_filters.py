@@ -14,6 +14,7 @@ Hai biến thể hành vi được BẢO TOÀN 100% (đã characterization-test,
 field_map (contract — ADR-M02-04): remap key trong nhánh dict TRƯỚC khi tạo điều kiện
 (vd {"workflow_state": "status"}). KHÔNG áp cho list passthrough (giống bản gốc).
 """
+
 import json
 
 import frappe

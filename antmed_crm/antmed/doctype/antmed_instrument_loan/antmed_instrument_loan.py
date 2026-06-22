@@ -30,7 +30,13 @@ class AntMedInstrumentLoan(Document):
 				  AND status IN ({placeholders})
 				  AND booked_at < %s AND due_return_at > %s
 				LIMIT 1""",
-			(self.instrument_set, self.name or "__new__", *ACTIVE_LOAN_STATUSES, self.due_return_at, self.booked_at),
+			(
+				self.instrument_set,
+				self.name or "__new__",
+				*ACTIVE_LOAN_STATUSES,
+				self.due_return_at,
+				self.booked_at,
+			),
 		)
 		if rows:
 			frappe.throw(_("BR-05: Bộ dụng cụ đã có lịch mượn trùng khoảng thời gian này."))
