@@ -5,7 +5,6 @@ from frappe import _
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.desk.form.assign_to import set_status
 from frappe.model import no_value_fields
-from frappe.model.delete_doc import get_dynamic_linked_docs, get_linked_docs
 from frappe.model.document import get_controller
 from frappe.utils import make_filter_tuple
 from pypika import Criterion
@@ -680,6 +679,10 @@ def get_linked_docs_of_document(doctype: str, docname: str):
 		doc = frappe.get_doc(doctype, docname)
 	except frappe.DoesNotExistError:
 		return []
+
+	# Imported lazily: these helpers exist only on Frappe >= 15.112, so a module-level
+	# import would break app load (install/migrate) on older Frappe.
+	from frappe.model.delete_doc import get_dynamic_linked_docs, get_linked_docs
 
 	linked_docs = get_linked_docs(doc)
 	dynamic_linked_docs = get_dynamic_linked_docs(doc)

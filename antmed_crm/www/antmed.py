@@ -3,10 +3,16 @@
 
 import frappe
 from frappe import _
-from frappe.integrations.frappe_providers.frappecloud_billing import is_fc_site
 from frappe.translate import get_messages_for_boot, get_translated_doctypes
 from frappe.utils import cint, get_system_timezone
 from frappe.utils.telemetry import capture
+
+try:
+	from frappe.integrations.frappe_providers.frappecloud_billing import is_fc_site
+except ImportError:  # frappe_providers added in newer Frappe; a self-hosted site is never an FC site
+
+	def is_fc_site():
+		return False
 
 no_cache = 1
 
